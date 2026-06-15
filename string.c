@@ -1,32 +1,28 @@
 #include "mirage.h"
 
-String *new_string(char *start, char *end)
+char *strndup(const char *source, u32 size)
 {
-    String *str = calloc(1, sizeof(String));
-    str->loc = start;
-    str->len = end - start;
-    return str;
+    char *buf = malloc((size + 1) * sizeof(char));
+    memcpy(buf, source, size);
+    buf[size] = '\0';
+    return buf;
 }
 
-bool string_equal(String *s1, String *s2)
+// Takes a printf-style format string and returns a formatted string.
+char *format(const char *fmt, ...)
 {
-    if (s1->len == s2->len && s1->loc == s2->loc) {
-        return true;
-    }
+    va_list ap;
+    va_start(ap, fmt);
 
-    bool result = s1->len == s2->len && !strncmp(s1->loc, s2->loc, s1->len);
-    return result;
-}
+    va_list ap2;
+    va_copy(ap2, ap);
 
-char *to_c_str(String *s)
-{
-    if (s->c_str) {
-        return s->c_str;
-    }
+    int len = _vscprintf(fmt, ap);
 
-    char *buf = malloc((s->len + 1) * sizeof(char));
-    memcpy(buf, s->loc, s->len);
-    buf[s->len] = '\0';
-    s->c_str = buf;
-    return s->c_str;
+    char *buf = malloc((size_t)len + 1);
+    vsnprintf(buf, (size_t)len + 1, fmt, ap2);
+
+    va_end(ap);
+    va_end(ap2);
+    return buf;
 }

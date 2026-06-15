@@ -1,10 +1,12 @@
 #include "mirage.h"
 
+Type *ty_char = &(Type){ TY_CHAR, 1 };
 Type *ty_int = &(Type){ TY_INT, 8 };
 
 bool is_integer(Type *ty)
 {
-    return ty->kind == TY_INT;
+    TypeKind kind = ty->kind;
+    return kind == TY_INT || kind == TY_CHAR;
 }
 
 Type *copy_type(Type *ty)
@@ -100,6 +102,19 @@ void add_type(Node *node)
             error_tok(node->tok, "invalid pointer dereference");
         }
         node->ty = node->lhs->ty->base;
+        return;
+    case ND_STMT_EXPR:
+        if (node->body) {
+            Node *stmt = node->body;
+            while (stmt->next) {
+                stmt = stmt->next;
+            }
+            if (stmt->kind == ND_EXPR_STMT) {
+                node->ty = stmt->lhs->ty;
+                return;
+            }
+        }
+        error_tok(node->tok, "statement expression returning void is not supported");
         return;
     default:
         break;

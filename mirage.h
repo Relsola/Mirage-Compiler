@@ -5,6 +5,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdint.h>
+#include <errno.h>
 
 #define internal        static
 #define local_persist   static
@@ -13,6 +15,16 @@
 #ifndef __clang__
 #define __attribute__(x)
 #endif
+
+typedef int8_t i8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
+
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
 
 typedef struct String String;
 typedef struct Type Type;
@@ -28,18 +40,26 @@ typedef enum
     TK_IDENT,   // Identifiers
     TK_PUNCT,   // Punctuators
     TK_KEYWORD, // Keywords
+    TK_STR,     // String literals
     TK_NUM,     // Numeric literals
     TK_EOF,     // End-of-file markers
 } TokenKind;
 
 // Token type
 typedef struct Token Token;
+// Token type
+typedef struct Token Token;
 struct Token
 {
     TokenKind kind; // Token kind
-    String *name;   // Token name
     Token *next;    // Next token
-    int val;        // If kind is TK_NUM, it's value
+    int val;        // If kind is TK_NUM, its value
+    char *loc;      // Token location
+    int len;        // Token length
+    Type *ty;       // Used if TK_STR
+    char *str;      // String literal contents including terminating '\0'
+
+    int line_no;    // Line number
 };
 
 __attribute__((noreturn)) void error(char *fmt, ...);
@@ -49,7 +69,7 @@ __attribute__((noreturn)) void error_tok(Token *tok, char *fmt, ...);
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *s);
 bool consume(Token **rest, Token *tok, char *str);
-Token *tokenize(char *input);
+Token *tokenize_file(char *filename);
 
 //
 // parse.c
@@ -60,7 +80,7 @@ typedef struct Obj Obj;
 struct Obj
 {
     Obj *next;
-    String *name;  // Variable name
+    char *name;    // Variable name
     Type *ty;      // Type
     bool is_local; // local or global/function
 
@@ -69,8 +89,12 @@ struct Obj
 
     // Global variable or function
     bool is_function;
-    Obj *params;
 
+    // Global variable
+    char *init_data;
+
+    // Function
+    Obj *params;
     Node *body;
     Obj *locals;
     int stack_size;
@@ -97,12 +121,12 @@ typedef enum
     ND_BLOCK,     // { ... }
     ND_FUNCALL,   // Function call
     ND_EXPR_STMT, // Expression statement
+    ND_STMT_EXPR, // Statement expression
     ND_VAR,       // Variable
     ND_NUM,       // Integer
 } NodeKind;
 
 // AST node type
-// TODO use union
 struct Node
 {
     NodeKind kind; // Node kind
@@ -110,23 +134,25 @@ struct Node
     Type *ty;      // Type, e.g. int or pointer to int
     Token *tok;    // Representative token
 
-    Node *rhs;  // Left-hand side
-    Node *lhs;  // Right-hand side
-    Node *body; // Block
+    Node *lhs; // Left-hand side
+    Node *rhs; // Right-hand side
 
     // "if" or "for" statement
-    Node *init;
     Node *cond;
     Node *then;
     Node *els;
+    Node *init;
     Node *inc;
+
+    // Block or statement expression
+    Node *body;
 
     // Function call
     char *funcname;
     Node *args;
 
     Obj *var; // Used if kind == ND_VAR
-    int val;  // Used if  kind == ND_NUM
+    int val;  // Used if kind == ND_NUM
 };
 
 Obj *parse(Token *tok);
@@ -137,9 +163,10 @@ Obj *parse(Token *tok);
 
 typedef enum
 {
-    TY_FUNC,
+    TY_CHAR,
     TY_INT,
     TY_PTR,
+    TY_FUNC,
     TY_ARRAY,
 } TypeKind;
 
@@ -170,6 +197,7 @@ struct Type
     Type *next;
 };
 
+extern Type *ty_char;
 extern Type *ty_int;
 
 bool is_integer(Type *ty);
@@ -183,19 +211,11 @@ void add_type(Node *node);
 // codegen.c
 //
 
-void codegen(Obj *prog);
+void codegen(Obj *prog, FILE *out);
 
 //
 // string.s
 //
 
-struct String
-{
-    char *loc;   // Token location
-    int len;     // Token length
-    char *c_str; // C string
-};
-
-String *new_string(char *start, char *end);
-bool string_equal(String *s1, String *s2);
-char *to_c_str(String *s);
+char *strndup(const char *source, u32 size);
+char *format(const char *fmt, ...);

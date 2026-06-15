@@ -1,13 +1,35 @@
 #include "mirage.h"
 
+// Input filename
+internal char *current_filename;
+
 // Input string
 internal char *current_input;
 
-// Reports an error location and exit
-__attribute__((noreturn)) internal void verror_at(char *loc, char *fmt, va_list ap)
+// Reports an error message in the following format and exit.
+//
+// foo.c:10: x = y + 1;
+//               ^ <error message here>
+__attribute__((noreturn)) internal void verror_at(int line_no, char *loc, char *fmt, va_list ap)
 {
-    int pos = loc - current_input;
-    fprintf(stderr, "%s\n", current_input);
+    // Find a line containing `loc`.
+    char *line = loc;
+    while (current_input < line && line[-1] != '\n') {
+        --line;
+    }
+
+    char *end = loc;
+    while (*end != '\n') {
+        ++end;
+    }
+
+    // Print out the line.
+    int indent = fprintf(stderr, "%s:%d: ", current_filename, line_no);
+    fprintf(stderr, "%.*s\n", (int)(end - line), line);
+
+    // Show the error message.
+    int pos = loc - line + indent;
+
     fprintf(stderr, "%*s", pos, ""); // print pos spaces.
     fprintf(stderr, "^ ");
     vfprintf(stderr, fmt, ap);
@@ -27,22 +49,28 @@ void error(char *fmt, ...)
 
 void error_at(char *loc, char *fmt, ...)
 {
+    int line_no = 1;
+    for (char *p = current_input; p < loc; p++) {
+        if (*p == '\n') {
+            line_no++;
+        }
+    }
+
     va_list ap;
     va_start(ap, fmt);
-    verror_at(loc, fmt, ap);
+    verror_at(line_no, loc, fmt, ap);
 }
 
 void error_tok(Token *tok, char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    verror_at(tok->name->loc, fmt, ap);
+    verror_at(tok->line_no, tok->loc, fmt, ap);
 }
 
 bool equal(Token *tok, char *op)
 {
-    String *name = tok->name;
-    bool result = memcmp(name->loc, op, name->len) == 0 && op[name->len] == '\0';
+    bool result = memcmp(tok->loc, op, tok->len) == 0 && op[tok->len] == '\0';
     return result;
 }
 
@@ -68,7 +96,8 @@ internal Token *new_token(TokenKind kind, char *start, char *end)
 {
     Token *tok = calloc(1, sizeof(Token));
     tok->kind = kind;
-    tok->name = new_string(start, end);
+    tok->loc = start;
+    tok->len = end - start;
     return tok;
 }
 
@@ -104,7 +133,7 @@ internal int read_punct(char *p)
 
 internal bool is_keyword(Token *tok)
 {
-    local_persist char *kw[] = {"return", "if", "else", "for", "while", "int"};
+    local_persist char *kw[] = { "return", "if", "else", "for", "while", "int", "sizeof", "char" };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
         if (equal(tok, kw[i])) {
@@ -123,14 +152,158 @@ internal void convert_keywords(Token *tok)
     }
 }
 
-// Tokenize a given string and returns new tokens.
-Token *tokenize(char *p)
+internal int from_hex(char c)
 {
+    if ('0' <= c && c <= '9') {
+        return c - '0';
+    }
+    if ('a' <= c && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    return c - 'A' + 10;
+}
+
+internal int read_escaped_char(char **new_pos, char *p)
+{
+    if ('0' <= *p && *p <= '7') {
+        // Read an octal number.
+        int c = *p++ - '0';
+        if ('0' <= *p && *p <= '7') {
+            c = (c << 3) + (*p++ - '0');
+            if ('0' <= *p && *p <= '7') {
+                c = (c << 3) + (*p++ - '0');
+            }
+        }
+        *new_pos = p;
+        return c;
+    }
+
+    if (*p == 'x') {
+        // Read a hexadecimal number.
+        p++;
+        if (!isxdigit(*p)) {
+            error_at(p, "invalid hex escape sequence");
+        }
+
+        int c = 0;
+        for (; isxdigit(*p); p++) {
+            c = (c << 4) + from_hex(*p);
+        }
+        *new_pos = p;
+        return c;
+    }
+
+    *new_pos = p + 1;
+    // Escape sequences are defined using themselves here. E.g.
+    // '\n' is implemented using '\n'. This tautological definition
+    // works because the compiler that compiles our compiler knows
+    // what '\n' actually is. In other words, we "inherit" the ASCII
+    // code of '\n' from the compiler that compiles our compiler,
+    // so we don't have to teach the actual code here.
+    //
+    // This fact has huge implications not only for the correctness
+    // of the compiler but also for the security of the generated code.
+    // For more info, read "Reflections on Trusting Trust" by Ken Thompson.
+    // https://github.com/rui314/chibicc/wiki/thompson1984.pdf
+    switch (*p) {
+    case 'a':
+        return '\a';
+    case 'b':
+        return '\b';
+    case 't':
+        return '\t';
+    case 'n':
+        return '\n';
+    case 'v':
+        return '\v';
+    case 'f':
+        return '\f';
+    case 'r':
+        return '\r';
+    default:
+        return *p;
+    }
+}
+
+// Find a closing double-quote.
+internal char *string_literal_end(char *p)
+{
+    char *start = p;
+    for (; *p != '"'; p++) {
+        if (*p == '\n' || *p == '\0') {
+            error_at(start, "unclosed string literal");
+        }
+        if (*p == '\\') {
+            p++;
+        }
+    }
+    return p;
+}
+
+internal Token *read_string_literal(char *start)
+{
+    char *end = string_literal_end(start + 1);
+    char *buf = calloc(1, end - start);
+    int len = 0;
+
+    for (char *p = start + 1; p < end;) {
+        if (*p == '\\') {
+            buf[len++] = read_escaped_char(&p, p + 1);
+        } else {
+            buf[len++] = *p++;
+        }
+    }
+
+    Token *tok = new_token(TK_STR, start, end + 1);
+    tok->ty = array_of(ty_char, len + 1);
+    tok->str = buf;
+    return tok;
+}
+
+// Initialize line info for all tokens.
+internal void add_line_numbers(Token *tok) {
+  char *p = current_input;
+  int n = 1;
+
+  do {
+      if (p == tok->loc) {
+          tok->line_no = n;
+          tok = tok->next;
+      }
+      if (*p == '\n') {
+          ++n;
+      }
+  } while (*p++);
+}
+
+// Tokenize a given string and returns new tokens.
+internal Token *tokenize(char *filename, char *p)
+{
+    current_filename = filename;
     current_input = p;
     Token head = {};
     Token *cur = &head;
 
     while (*p) {
+        // Skip line comments.
+        if (startswith(p, "//")) {
+            p += 2;
+            while (*p != '\n') {
+                p++;
+            }
+            continue;
+        }
+
+        // Skip block comments.
+        if (startswith(p, "/*")) {
+            char *q = strstr(p + 2, "*/");
+            if (!q) {
+                error_at(p, "unclosed block comment");
+            }
+            p = q + 2;
+            continue;
+        }
+
         // Skip whitespace characters
         if (isspace(*p)) {
             p++;
@@ -139,10 +312,17 @@ Token *tokenize(char *p)
 
         // Numeric literal
         if (isdigit(*p)) {
-            char *start = p;
-            int val = strtoul(p, &p, 10);
-            cur = cur->next = new_token(TK_NUM, start, p);
-            cur->val = val;
+            cur = cur->next = new_token(TK_NUM, p, p);
+            char *q = p;
+            cur->val = strtoul(p, &p, 10);
+            cur->len = p - q;
+            continue;
+        }
+
+        // String literal
+        if (*p == '"') {
+            cur = cur->next = read_string_literal(p);
+            p += cur->len;
             continue;
         }
 
@@ -168,6 +348,85 @@ Token *tokenize(char *p)
     }
 
     cur = cur->next = new_token(TK_EOF, p, p);
+    add_line_numbers(head.next);
     convert_keywords(head.next);
     return head.next;
+}
+
+// Returns the contents of a given file.
+internal char *read_file(char *path)
+{
+    FILE *fp;
+
+    if (strcmp(path, "-") == 0) {
+        // By convention, read from stdin if a given filename is "-".
+        fp = stdin;
+    } else {
+        errno_t err = fopen_s(&fp, path, "rb");
+        if (err || !fp) {
+            char err_buf[256];
+            strerror_s(err_buf, sizeof(err_buf), err);
+            error("cannot open %s: %s", path, err_buf);
+        }
+    }
+
+    char *buf = NULL;
+    u64 len = 0;
+
+    if (fp != stdin) {
+        fseek(fp, 0, SEEK_END);
+        i64 size = ftell(fp);
+        if (size < 0) {
+            error("read failed");
+        }
+
+        rewind(fp);
+
+        buf = malloc(size + 2);
+        if (!buf) {
+            error("out of memory");
+        }
+
+        u64 nread = fread(buf, 1, size, fp);
+
+        if (nread != size && ferror(fp)) {
+            error("read failed");
+        }
+
+        fclose(fp);
+        len = nread;
+        goto __terminate_source;
+    }
+
+    u64 cap = 4096;
+    buf = malloc(cap);
+    for (;;) {
+        if (len == cap) {
+            cap *= 2;
+            buf = realloc(buf, cap);
+        }
+
+        u64 n = fread(buf + len, 1, cap - len, fp);
+        len += n;
+
+        if (n == 0) {
+            break;
+        }
+    }
+
+    if (len + 2 > cap) {
+        buf = realloc(buf, len + 2);
+    }
+
+__terminate_source:
+    if (len == 0 || buf[len - 1] != '\n') {
+        buf[len++] = '\n';
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
+Token *tokenize_file(char *path)
+{
+    return tokenize(path, read_file(path));
 }
