@@ -5,6 +5,7 @@ internal FILE *output_file;
 internal int depth;
 
 internal char *argreg8[] = { "cl", "dl", "r8b", "r9b" };
+internal char *argreg32[] = { "ecx", "edx", "r8d", "r9d" };
 internal char *argreg64[] = { "rcx", "rdx", "r8", "r9" };
 
 internal Obj *current_fn;
@@ -12,12 +13,13 @@ internal Obj *current_fn;
 internal void gen_expr(Node *node);
 internal void gen_stmt(Node *node);
 
-internal void println(char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  vfprintf(output_file, fmt, ap);
-  va_end(ap);
-  fprintf(output_file, "\n");
+internal void println(char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(output_file, fmt, ap);
+    va_end(ap);
+    fprintf(output_file, "\n");
 }
 
 internal int count(void)
@@ -40,7 +42,7 @@ internal void pop(char *arg)
 
 // Round up `n` to the nearest multiple of `align`. For instance,
 // align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
-internal int align_to(int n, int align)
+int align_to(int n, int align)
 {
     int result = (n + align - 1) / align * align;
     return result;
@@ -62,6 +64,14 @@ internal void gen_addr(Node *node)
     case ND_DEREF:
         gen_expr(node->lhs);
         return;
+    case ND_COMMA:
+        gen_expr(node->lhs);
+        gen_addr(node->rhs);
+        return;
+    case ND_MEMBER:
+        gen_addr(node->lhs);
+        println("  add rax, %d", node->member->offset);
+        return;
     default:
         error_tok(node->tok, "not an lvalue");
     }
@@ -70,7 +80,7 @@ internal void gen_addr(Node *node)
 // Load a value from where %rax is pointing to.
 internal void load(Type *ty)
 {
-    if (ty->kind == TY_ARRAY) {
+    if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
         // If it is an array, do not attempt to load a value to the
         // register because in general we can't load an entire array to a
         // register. As a result, the result of an evaluation of an array
@@ -82,18 +92,30 @@ internal void load(Type *ty)
 
     if (ty->size == 1) {
         println("  movsx rax, byte ptr [rax]");
+    } else if (ty->size == 4) {
+        println("  movsxd rax, dword ptr [rax]");
     } else {
         println("  mov rax, [rax]");
     }
 }
 
 // Store %rax to an address that the stack top is pointing to.
-static void store(Type *ty)
+internal void store(Type *ty)
 {
     pop("r10");
 
+    if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+        for (int i = 0; i < ty->size; i++) {
+            println("  mov r8b, byte ptr [rax + %d]", i);
+            println("  mov byte ptr [r10 + %d], r8b", i);
+        }
+        return;
+    }
+
     if (ty->size == 1) {
         println("  mov [r10], al");
+    } else if (ty->size == 4) {
+        println("  mov [r10], eax");
     } else {
         println("  mov [r10], rax");
     }
@@ -110,6 +132,7 @@ void gen_expr(Node *node)
         println("  neg rax");
         return;
     case ND_VAR:
+    case ND_MEMBER:
         gen_addr(node);
         load(node->ty);
         return;
@@ -119,6 +142,10 @@ void gen_expr(Node *node)
         return;
     case ND_ADDR:
         gen_addr(node->lhs);
+        return;
+    case ND_COMMA:
+        gen_expr(node->lhs);
+        gen_expr(node->rhs);
         return;
     case ND_ASSIGN:
         gen_addr(node->lhs);
@@ -259,6 +286,7 @@ internal void assign_lvar_offsets(Obj *prog)
         int offset = 0;
         for (Obj *var = fn->locals; var; var = var->next) {
             offset += var->ty->size;
+            offset = align_to(offset, var->ty->align);
             var->offset = offset;
         }
         fn->stack_size = align_to(offset, 16);
@@ -286,6 +314,22 @@ internal void emit_data(Obj *prog)
     }
 }
 
+internal void store_gp(int r, int offset, int size)
+{
+    switch (size) {
+    case 1:
+        println("  mov [rbp - %d] , %s", offset, argreg8[r]);
+        return;
+    case 4:
+        println("  mov [rbp - %d] , %s", offset, argreg32[r]);
+        return;
+    case 8:
+        println("  mov [rbp - %d] , %s", offset, argreg64[r]);
+        return;
+    }
+    unreachable();
+}
+
 internal void emit_text(Obj *prog)
 {
     for (Obj *fn = prog; fn; fn = fn->next) {
@@ -306,11 +350,7 @@ internal void emit_text(Obj *prog)
         // Save passed-by-register arguments to the stack
         int i = 0;
         for (Obj *var = fn->params; var; var = var->next) {
-            if (var->ty->size == 1) {
-                println("  mov [rbp - %d], %s", var->offset, argreg8[i++]);
-            } else {
-                println("  mov [rbp - %d], %s", var->offset, argreg64[i++]);
-            }
+            store_gp(i++, var->offset, var->ty->size);
         }
 
         // Emit code

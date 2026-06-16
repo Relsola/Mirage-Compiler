@@ -124,16 +124,22 @@ internal bool is_ident2(char c)
 // Read a punctuator token from p and returns its length.
 internal int read_punct(char *p)
 {
-    if (startswith(p, "==") || startswith(p, "!=") || startswith(p, "<=") || startswith(p, ">=")) {
-        return 2;
-    }
+    local_persist char *kw[] = { "==", "!=", "<=", ">=", "->" };
 
+    for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
+        if (startswith(p, kw[i])) {
+            return strlen(kw[i]);
+        }
+    }
     return ispunct(*p) ? 1 : 0;
 }
 
 internal bool is_keyword(Token *tok)
 {
-    local_persist char *kw[] = { "return", "if", "else", "for", "while", "int", "sizeof", "char" };
+    local_persist char *kw[] = {
+        "return", "if", "else", "for", "while", "int", "sizeof", "char",
+        "struct", "union"
+    };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
         if (equal(tok, kw[i])) {
@@ -261,19 +267,20 @@ internal Token *read_string_literal(char *start)
 }
 
 // Initialize line info for all tokens.
-internal void add_line_numbers(Token *tok) {
-  char *p = current_input;
-  int n = 1;
+internal void add_line_numbers(Token *tok)
+{
+    char *p = current_input;
+    int n = 1;
 
-  do {
-      if (p == tok->loc) {
-          tok->line_no = n;
-          tok = tok->next;
-      }
-      if (*p == '\n') {
-          ++n;
-      }
-  } while (*p++);
+    do {
+        if (p == tok->loc) {
+            tok->line_no = n;
+            tok = tok->next;
+        }
+        if (*p == '\n') {
+            ++n;
+        }
+    } while (*p++);
 }
 
 // Tokenize a given string and returns new tokens.
@@ -381,14 +388,12 @@ internal char *read_file(char *path)
         }
 
         rewind(fp);
-
         buf = malloc(size + 2);
         if (!buf) {
             error("out of memory");
         }
 
         u64 nread = fread(buf, 1, size, fp);
-
         if (nread != size && ferror(fp)) {
             error("read failed");
         }

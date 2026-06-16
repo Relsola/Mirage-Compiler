@@ -27,17 +27,32 @@ struct VarScope
     Obj *var;
 };
 
+// Scope for struct or union tags
+typedef struct TagScope TagScope;
+struct TagScope
+{
+    TagScope *next;
+    char *name;
+    Type *ty;
+};
+
 // Represents a block scope.
 typedef struct Scope Scope;
 struct Scope
 {
     Scope *next;
+
+    // C has two block scopes; one is for variables and the other is
+    // for struct tags.
     VarScope *vars;
+    TagScope *tags;
 };
 
 // All local variable instances created during parsing are
 // accumulated to this list.
 global_variable Obj *locals;
+
+// Likewise, global variables are accumulated to this list.
 global_variable Obj *globals;
 
 internal Scope *scope = &(Scope){};
@@ -56,18 +71,22 @@ internal Node *new_add(Node *lhs, Node *rhs, Token *tok);
 internal Node *new_sub(Node *lhs, Node *rhs, Token *tok);
 internal Node *add(Token **rest, Token *tok);
 internal Node *mul(Token **rest, Token *tok);
+internal Type *struct_decl(Token **rest, Token *tok);
+internal Type *union_decl(Token **rest, Token *tok);
 internal Node *postfix(Token **rest, Token *tok);
 internal Node *unary(Token **rest, Token *tok);
 internal Node *primary(Token **rest, Token *tok);
 
-internal void enter_scope(void) {
-  Scope *sc = calloc(1, sizeof(Scope));
-  sc->next = scope;
-  scope = sc;
+internal void enter_scope(void)
+{
+    Scope *sc = calloc(1, sizeof(Scope));
+    sc->next = scope;
+    scope = sc;
 }
 
-internal void leave_scope(void) {
-  scope = scope->next;
+internal void leave_scope(void)
+{
+    scope = scope->next;
 }
 
 // Find a local variable by name.
@@ -77,6 +96,18 @@ internal Obj *find_var(Token *tok)
         for (VarScope *sc2 = sc->vars; sc2; sc2 = sc2->next) {
             if (equal(tok, sc2->name)) {
                 return sc2->var;
+            }
+        }
+    }
+    return NULL;
+}
+
+internal Type *find_tag(Token *tok)
+{
+    for (Scope *sc = scope; sc; sc = sc->next) {
+        for (TagScope *sc2 = sc->tags; sc2; sc2 = sc2->next) {
+            if (equal(tok, sc2->name)) {
+                return sc2->ty;
             }
         }
     }
@@ -120,13 +151,14 @@ internal Node *new_var_node(Obj *var, Token *tok)
     return node;
 }
 
-internal VarScope *push_scope(char *name, Obj *var) {
-  VarScope *sc = calloc(1, sizeof(VarScope));
-  sc->name = name;
-  sc->var = var;
-  sc->next = scope->vars;
-  scope->vars = sc;
-  return sc;
+internal VarScope *push_scope(char *name, Obj *var)
+{
+    VarScope *sc = calloc(1, sizeof(VarScope));
+    sc->name = name;
+    sc->var = var;
+    sc->next = scope->vars;
+    scope->vars = sc;
+    return sc;
 }
 
 internal Obj *new_var(char *name, Type *ty)
@@ -189,7 +221,16 @@ internal int get_number(Token *tok)
     return tok->val;
 }
 
-// declspec = "char" | "int"
+internal void push_tag_scope(Token *tok, Type *ty)
+{
+    TagScope *sc = calloc(1, sizeof(TagScope));
+    sc->name = strndup(tok->loc, tok->len);
+    sc->ty = ty;
+    sc->next = scope->tags;
+    scope->tags = sc;
+}
+
+// declspec = "char" | "int" | struct-decl
 internal Type *declspec(Token **rest, Token *tok)
 {
     if (equal(tok, "char")) {
@@ -197,8 +238,27 @@ internal Type *declspec(Token **rest, Token *tok)
         return ty_char;
     }
 
-    *rest = skip(tok, "int");
-    return ty_int;
+    if (equal(tok, "int")) {
+        *rest = tok->next;
+        return ty_int;
+    }
+
+    if (equal(tok, "struct")) {
+        return struct_decl(rest, tok->next);
+    }
+
+    if (equal(tok, "union")) {
+        return union_decl(rest, tok->next);
+    }
+
+    // struct tag
+    Type *tag = find_tag(tok);
+    if (tag) {
+        *rest = tok->next;
+        return tag;
+    }
+
+    error_tok(tok, "typename expected");
 }
 
 // func-params = (param ("," param)*)? ")"
@@ -296,14 +356,18 @@ internal Node *declaration(Token **rest, Token *tok)
 // Returns true if a given token represents a type.
 internal bool is_typename(Token *tok)
 {
-    local_persist char *kw[] = { "char", "int" };
+    local_persist char *kw[] = { "char", "int", "struct", "union" };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
         if (equal(tok, kw[i])) {
             return true;
         }
     }
-    return false;
+
+    // find tag && not variable
+    Type *ty = find_tag(tok);
+    Obj *var = find_var(tok);
+    return ty != NULL && var == NULL;
 }
 
 // compound-stmt = (declaration | stmt)* "}"
@@ -625,21 +689,162 @@ internal Node *unary(Token **rest, Token *tok)
     return postfix(rest, tok);
 }
 
-// postfix = primary ("[" expr "]")*
+// struct-members = (declspec declarator (","  declarator)* ";")*
+internal void struct_members(Token **rest, Token *tok, Type *ty)
+{
+    Member head = {};
+    Member *cur = &head;
+
+    while (!equal(tok, "}")) {
+        Type *basety = declspec(&tok, tok);
+        bool first = true;
+
+        while (!consume(&tok, tok, ";")) {
+            if (!first) {
+                tok = skip(tok, ",");
+            }
+            first = false;
+
+            Member *mem = calloc(1, sizeof(Member));
+            mem->ty = declarator(&tok, tok, basety);
+            mem->name = mem->ty->name;
+            cur = cur->next = mem;
+        }
+    }
+
+    *rest = tok->next;
+    ty->members = head.next;
+}
+
+// struct-union-decl = ident? ("{" struct-members)?
+internal Type *struct_union_decl(Token **rest, Token *tok)
+{
+    // Read a tag.
+    Token *tag = NULL;
+    if (tok->kind == TK_IDENT) {
+        tag = tok;
+        tok = tok->next;
+    }
+
+    if (tag && !equal(tok, "{")) {
+        Type *ty = find_tag(tag);
+        if (!ty) {
+            error_tok(tag, "unknown struct type");
+        }
+
+        *rest = tok;
+        return ty;
+    }
+
+    // Construct a struct object.
+    Type *ty = calloc(1, sizeof(Type));
+    ty->kind = TY_STRUCT;
+    struct_members(rest, tok->next, ty);
+    ty->align = 1;
+
+    // Register the struct type if a name was given.
+    if (tag) {
+        push_tag_scope(tag, ty);
+    }
+    return ty;
+}
+
+// struct-decl = struct-union-decl
+internal Type *struct_decl(Token **rest, Token *tok)
+{
+    Type *ty = struct_union_decl(rest, tok);
+    ty->kind = TY_STRUCT;
+
+    // Assign offsets within the struct to members.
+    int offset = 0;
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+        offset = align_to(offset, mem->ty->align);
+        mem->offset = offset;
+        offset += mem->ty->size;
+
+        if (ty->align < mem->ty->align) {
+            ty->align = mem->ty->align;
+        }
+    }
+    ty->size = align_to(offset, ty->align);
+    return ty;
+}
+
+// union-decl = struct-union-decl
+internal Type *union_decl(Token **rest, Token *tok)
+{
+    Type *ty = struct_union_decl(rest, tok);
+    ty->kind = TY_UNION;
+
+    // If union, we don't have to assign offsets because they
+    // are already initialized to zero. We need to compute the
+    // alignment and the size though.
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+        if (ty->align < mem->ty->align) {
+            ty->align = mem->ty->align;
+        }
+        if (ty->size < mem->ty->size) {
+            ty->size = mem->ty->size;
+        }
+    }
+    ty->size = align_to(ty->size, ty->align);
+    return ty;
+}
+
+internal Member *get_struct_member(Type *ty, Token *tok)
+{
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+        if (mem->name->len == tok->len && !strncmp(mem->name->loc, tok->loc, tok->len)) {
+            return mem;
+        }
+    }
+    error_tok(tok, "no such member");
+}
+
+internal Node *struct_ref(Node *lhs, Token *tok)
+{
+    add_type(lhs);
+    if (lhs->ty->kind != TY_STRUCT && lhs->ty->kind != TY_UNION) {
+        error_tok(lhs->tok, "not a struct nor a union");
+    }
+
+    Node *node = new_unary(ND_MEMBER, lhs, tok);
+    node->member = get_struct_member(lhs->ty, tok);
+    return node;
+}
+
+// postfix = primary ("[" expr "]" | "." ident | "->" ident)*
 internal Node *postfix(Token **rest, Token *tok)
 {
     Node *node = primary(&tok, tok);
 
-    while (equal(tok, "[")) {
-        // x[y] is short for *(x+y)
-        Token *start = tok;
-        Node *idx = expr(&tok, tok->next);
-        tok = skip(tok, "]");
-        node = new_unary(ND_DEREF, new_add(node, idx, start), start);
-    }
+    for (;;) {
+        if (equal(tok, "[")) {
+            // x[y] is short for *(x+y)
+            Token *start = tok;
+            Node *idx = expr(&tok, tok->next);
+            tok = skip(tok, "]");
+            node = new_unary(ND_DEREF, new_add(node, idx, start), start);
+            continue;
+        }
 
-    *rest = tok;
-    return node;
+        if (equal(tok, ".")) {
+            node = struct_ref(node, tok->next);
+            tok = tok->next->next;
+            continue;
+        }
+
+        if (equal(tok, "->")) {
+            // x->y is short for (*x).y
+            node = new_unary(ND_DEREF, node, tok);
+            node = struct_ref(node, tok->next);
+            tok = tok->next->next;
+            continue;
+        }
+
+        *rest = tok;
+        return node;
+    }
 }
 
 // funcall = ident "(" (assign ("," assign)*)? ")"

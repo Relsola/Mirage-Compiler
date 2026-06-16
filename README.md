@@ -12,6 +12,11 @@
 int a = ({ int b = 3; b; }); // 3
 ```
 
+2. 自动注册类名
+```c
+struct t { int x; }; t y = {};
+```
+
 ## References
 
 - [chibicc:](https://github.com/rui314/chibicc) A small C compiler

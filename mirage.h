@@ -26,9 +26,9 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-typedef struct String String;
 typedef struct Type Type;
 typedef struct Node Node;
+typedef struct Member Member;
 
 //
 // tokenize.c
@@ -59,12 +59,14 @@ struct Token
     Type *ty;       // Used if TK_STR
     char *str;      // String literal contents including terminating '\0'
 
-    int line_no;    // Line number
+    int line_no; // Line number
 };
 
 __attribute__((noreturn)) void error(char *fmt, ...);
 __attribute__((noreturn)) void error_at(char *loc, char *fmt, ...);
 __attribute__((noreturn)) void error_tok(Token *tok, char *fmt, ...);
+
+#define unreachable() error("internal error at %s:%d", __FILE__, __LINE__)
 
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *s);
@@ -113,6 +115,7 @@ typedef enum
     ND_LT,        // <
     ND_LE,        // <=
     ND_ASSIGN,    // =
+    ND_MEMBER,    // . (struct member access)
     ND_ADDR,      // unary &
     ND_DEREF,     // unary *
     ND_RETURN,    // "return"
@@ -124,6 +127,8 @@ typedef enum
     ND_STMT_EXPR, // Statement expression
     ND_VAR,       // Variable
     ND_NUM,       // Integer
+
+    ND_COMMA,     // internal feature
 } NodeKind;
 
 // AST node type
@@ -147,6 +152,9 @@ struct Node
     // Block or statement expression
     Node *body;
 
+    // Struct member access
+    Member *member;
+
     // Function call
     char *funcname;
     Node *args;
@@ -168,12 +176,15 @@ typedef enum
     TY_PTR,
     TY_FUNC,
     TY_ARRAY,
+    TY_STRUCT,
+    TY_UNION,
 } TypeKind;
 
 struct Type
 {
     TypeKind kind;
-    int size; // sizeof() value
+    int size;  // sizeof() value
+    int align; // alignment
 
     // Pointer-to or array-of type. We intentionally use the same member
     // to represent pointer/array duality in C.
@@ -191,10 +202,22 @@ struct Type
     // Array
     int array_len;
 
+    // Struct
+    Member *members;
+
     // Function type
     Type *return_ty;
     Type *params;
     Type *next;
+};
+
+// Struct member
+struct Member
+{
+    Member *next;
+    Type *ty;
+    Token *name;
+    int offset;
 };
 
 extern Type *ty_char;
@@ -212,6 +235,7 @@ void add_type(Node *node);
 //
 
 void codegen(Obj *prog, FILE *out);
+int align_to(int n, int align);
 
 //
 // string.s
