@@ -1,7 +1,11 @@
 #include "mirage.h"
 
+Type *ty_void = &(Type){TY_VOID, 1, 1};
+
 Type *ty_char = &(Type){TY_CHAR, 1, 1};
+Type *ty_short = &(Type){TY_SHORT, 2, 2};
 Type *ty_int = &(Type){TY_INT, 4, 4};
+Type *ty_long = &(Type){TY_LONG, 8, 8};
 
 internal Type *new_type(TypeKind kind, int size, int align) {
   Type *ty = calloc(1, sizeof(Type));
@@ -14,7 +18,7 @@ internal Type *new_type(TypeKind kind, int size, int align) {
 bool is_integer(Type *ty)
 {
     TypeKind kind = ty->kind;
-    return kind == TY_INT || kind == TY_CHAR;
+    return kind == TY_CHAR || kind == TY_SHORT || kind == TY_INT || kind == TY_LONG;
 }
 
 Type *copy_type(Type *ty)
@@ -89,7 +93,7 @@ void add_type(Node *node)
     case ND_LE:
     case ND_NUM:
     case ND_FUNCALL:
-        node->ty = ty_int;
+        node->ty = ty_long;
         return;
     case ND_VAR:
         node->ty = node->var->ty;
@@ -110,6 +114,9 @@ void add_type(Node *node)
     case ND_DEREF:
         if (!node->lhs->ty->base) {
             error_tok(node->tok, "invalid pointer dereference");
+        }
+        if (node->lhs->ty->base->kind == TY_VOID) {
+            error_tok(node->tok, "dereferencing a void pointer");
         }
         node->ty = node->lhs->ty->base;
         return;

@@ -9,12 +9,14 @@
 1. 语句表达式
 
 ```c
-int a = ({ int b = 3; b; }); // 3
+int a = ({ int b = 3; b; });
+// int a = 3;
 ```
 
-2. 自动注册类名
+2. 自动注入 struct / union 到 typedef
 ```c
 struct t { int x; }; t y = {};
+// struct t { int x; }; typedef struct t t; t y = {};
 ```
 
 ## References

@@ -53,7 +53,7 @@ struct Token
 {
     TokenKind kind; // Token kind
     Token *next;    // Next token
-    int val;        // If kind is TK_NUM, its value
+    i64 val;        // If kind is TK_NUM, its value
     char *loc;      // Token location
     int len;        // Token length
     Type *ty;       // Used if TK_STR
@@ -91,6 +91,7 @@ struct Obj
 
     // Global variable or function
     bool is_function;
+    bool is_definition;
 
     // Global variable
     char *init_data;
@@ -160,7 +161,7 @@ struct Node
     Node *args;
 
     Obj *var; // Used if kind == ND_VAR
-    int val;  // Used if kind == ND_NUM
+    i64 val;  // Used if kind == ND_NUM
 };
 
 Obj *parse(Token *tok);
@@ -171,8 +172,11 @@ Obj *parse(Token *tok);
 
 typedef enum
 {
+    TY_VOID,
     TY_CHAR,
+    TY_SHORT,
     TY_INT,
+    TY_LONG,
     TY_PTR,
     TY_FUNC,
     TY_ARRAY,
@@ -220,8 +224,12 @@ struct Member
     int offset;
 };
 
+extern Type *ty_void;
+
 extern Type *ty_char;
+extern Type *ty_short;
 extern Type *ty_int;
+extern Type *ty_long;
 
 bool is_integer(Type *ty);
 Type *copy_type(Type *ty);

@@ -137,8 +137,8 @@ internal int read_punct(char *p)
 internal bool is_keyword(Token *tok)
 {
     local_persist char *kw[] = {
-        "return", "if", "else", "for", "while", "int", "sizeof", "char",
-        "struct", "union"
+        "void", "char", "short", "long", "int", "struct", "union",
+        "return", "if", "else", "for", "while", "sizeof", "typedef"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {

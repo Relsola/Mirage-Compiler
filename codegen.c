@@ -5,6 +5,7 @@ internal FILE *output_file;
 internal int depth;
 
 internal char *argreg8[] = { "cl", "dl", "r8b", "r9b" };
+internal char *argreg16[] = { "cx", "dx", "r8w", "r9w" };
 internal char *argreg32[] = { "ecx", "edx", "r8d", "r9d" };
 internal char *argreg64[] = { "rcx", "rdx", "r8", "r9" };
 
@@ -92,6 +93,8 @@ internal void load(Type *ty)
 
     if (ty->size == 1) {
         println("  movsx rax, byte ptr [rax]");
+    } else if (ty->size == 2) {
+        println("  movsx rax, word ptr [rax]");
     } else if (ty->size == 4) {
         println("  movsxd rax, dword ptr [rax]");
     } else {
@@ -114,6 +117,8 @@ internal void store(Type *ty)
 
     if (ty->size == 1) {
         println("  mov [r10], al");
+    } else if (ty->size == 2) {
+        println("  mov [r10], ax");
     } else if (ty->size == 4) {
         println("  mov [r10], eax");
     } else {
@@ -125,7 +130,7 @@ void gen_expr(Node *node)
 {
     switch (node->kind) {
     case ND_NUM:
-        println("  mov rax, %d", node->val);
+        println("  mov rax, %ld", node->val);
         return;
     case ND_NEG:
         gen_expr(node->lhs);
@@ -185,25 +190,39 @@ void gen_expr(Node *node)
     gen_expr(node->lhs);
     pop("r10");
 
+    char *rax, *r10;
+
+    if (node->lhs->ty->kind == TY_LONG || node->lhs->ty->base) {
+        rax = "rax";
+        r10 = "r10";
+    } else {
+        rax = "eax";
+        r10 = "r10d";
+    }
+
     switch (node->kind) {
     case ND_ADD:
-        println("  add rax, r10");
+        println("  add %s, %s", rax, r10);
         return;
     case ND_SUB:
-        println("  sub rax, r10");
+        println("  sub %s, %s", rax, r10);
         return;
     case ND_MUL:
-        println("  imul rax, r10");
+        println("  imul %s, %s", rax, r10);
         return;
     case ND_DIV:
-        println("  cqo");
-        println("  idiv  r10");
+        if (node->lhs->ty->size == 8) {
+            println("  cqo");
+        } else {
+            println("  cdq");
+        }
+        println("  idiv  %s", r10);
         return;
     case ND_EQ:
     case ND_NE:
     case ND_LE:
     case ND_LT:
-        println("  cmp rax, r10");
+        println("  cmp %s, %s", rax, r10);
 
         if (node->kind == ND_EQ) {
             println("  sete al");
@@ -320,6 +339,9 @@ internal void store_gp(int r, int offset, int size)
     case 1:
         println("  mov [rbp - %d] , %s", offset, argreg8[r]);
         return;
+    case 2:
+        println("  mov [rbp - %d] , %s", offset, argreg16[r]);
+        return;
     case 4:
         println("  mov [rbp - %d] , %s", offset, argreg32[r]);
         return;
@@ -333,7 +355,7 @@ internal void store_gp(int r, int offset, int size)
 internal void emit_text(Obj *prog)
 {
     for (Obj *fn = prog; fn; fn = fn->next) {
-        if (!fn->is_function) {
+        if (!fn->is_function || !fn->is_definition) {
             continue;
         }
 
