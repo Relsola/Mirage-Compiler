@@ -112,18 +112,33 @@ typedef enum
     ND_MUL,       // *
     ND_DIV,       // /
     ND_NEG,       // unary -
+    ND_MOD,       // %
+    ND_BITAND,    // &
+    ND_BITOR,     // |
+    ND_BITXOR,    // ^
+    ND_SHL,       // <<
+    ND_SHR,       // >>
     ND_EQ,        // ==
     ND_NE,        // !=
     ND_LT,        // <
     ND_LE,        // <=
     ND_ASSIGN,    // =
+    ND_COND,      // ?:
     ND_MEMBER,    // . (struct member access)
     ND_ADDR,      // unary &
     ND_DEREF,     // unary *
+    ND_NOT,       // !
+    ND_BITNOT,    // ~
+    ND_LOGAND,    // &&
+    ND_LOGOR,     // ||
     ND_RETURN,    // "return"
     ND_IF,        // "if"
     ND_FOR,       // "for" or "while"
+    ND_SWITCH,    // "switch"
+    ND_CASE,      // "case"
     ND_BLOCK,     // { ... }
+    ND_GOTO,      // "goto"
+    ND_LABEL,     // Labeled statement
     ND_FUNCALL,   // Function call
     ND_EXPR_STMT, // Expression statement
     ND_STMT_EXPR, // Statement expression
@@ -131,7 +146,7 @@ typedef enum
     ND_NUM,       // Integer
     ND_CAST,      // Type cast
 
-    ND_COMMA,     // internal feature
+    ND_COMMA, // internal feature
 } NodeKind;
 
 // AST node type
@@ -152,6 +167,10 @@ struct Node
     Node *init;
     Node *inc;
 
+    // "break" and "continue" labels
+    char *brk_label;
+    char *cont_label;
+
     // Block or statement expression
     Node *body;
 
@@ -163,8 +182,20 @@ struct Node
     Type *func_ty;
     Node *args;
 
-    Obj *var; // Used if kind == ND_VAR
-    i64 val;  // Used if kind == ND_NUM
+    // Goto or labeled statement
+    char *label;
+    char *unique_label;
+    Node *goto_next;
+
+    // Switch-cases
+    Node *case_next;
+    Node *default_case;
+
+    // Variable
+    Obj *var;
+
+    // Numeric literal
+    i64 val;
 };
 
 Node *new_cast(Node *expr, Type *ty);
@@ -226,6 +257,7 @@ struct Member
 {
     Member *next;
     Type *ty;
+    Token *tok; // for error message
     Token *name;
     int offset;
 };
@@ -244,6 +276,7 @@ Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int length);
 Type *enum_type(void);
+Type *struct_type(void);
 void add_type(Node *node);
 
 //

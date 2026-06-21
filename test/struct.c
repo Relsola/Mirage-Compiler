@@ -33,9 +33,6 @@ int main() {
   ASSERT(2, ({ struct t {char a[2];}; { struct t {char a[4];}; } struct t y; sizeof(y); }));
   ASSERT(3, ({ struct t {int x;}; int t=1; struct t y; y.x=2; t+y.x; }));
 
-  ASSERT(3, ({ struct t {int x;}; t y; y.x=2; y.x + 1; }));
-  ASSERT(3, ({ struct t {int x;}; t y; int t=1; y.x=2; t+y.x; }));
-
   ASSERT(3, ({ struct t {char a;} x; struct t *y = &x; x.a=3; y->a; }));
   ASSERT(3, ({ struct t {char a;} x; struct t *y = &x; y->a=3; x.a; }));
 
@@ -54,6 +51,11 @@ int main() {
 
   ASSERT(16, ({ struct {char a; long b;} x; sizeof(x); }));
   ASSERT(4, ({ struct {char a; short b;} x; sizeof(x); }));
+
+  ASSERT(8, ({ struct foo *bar; sizeof(bar); }));
+  ASSERT(4, ({ struct T *foo; struct T {int x;}; sizeof(struct T); }));
+  ASSERT(1, ({ struct T { struct T *next; int x; } a; struct T b; b.x=1; a.next=&b; a.next->x; }));
+  ASSERT(4, ({ typedef struct T T; struct T { int x; }; sizeof(T); }));
 
   printf("OK\n");
   return 0;

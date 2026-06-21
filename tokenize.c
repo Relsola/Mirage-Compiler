@@ -125,7 +125,10 @@ internal bool is_ident2(char c)
 // Read a punctuator token from p and returns its length.
 internal int read_punct(char *p)
 {
-    local_persist char *kw[] = { "==", "!=", "<=", ">=", "->" };
+    local_persist char *kw[] = {
+        "<<=", ">>=", "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=",
+        "++", "--", "%=", "&=", "|=", "^=", "&&", "||", "<<", ">>"
+    };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
         if (startswith(p, kw[i])) {
@@ -140,7 +143,7 @@ internal bool is_keyword(Token *tok)
     local_persist char *kw[] = {
         "void", "char", "short", "long", "int", "struct", "union", "_Bool",
         "return", "if", "else", "for", "while", "sizeof", "typedef", "enum",
-        "static"
+        "static", "goto", "break", "continue", "switch", "case", "default"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
@@ -292,6 +295,30 @@ internal Token *read_char_literal(char *start)
     return tok;
 }
 
+internal Token *read_int_literal(char *start) {
+  char *p = start;
+
+  int base = 10;
+  if (!_strnicmp(p, "0x", 2) && isalnum(p[2])) {
+    p += 2;
+    base = 16;
+  } else if (!_strnicmp(p, "0b", 2) && isalnum(p[2])) {
+    p += 2;
+    base = 2;
+  } else if (*p == '0') {
+    base = 8;
+  }
+
+  i64 val = strtoull(p, &p, base);
+  if (isalnum(*p)) {
+      error_at(p, "invalid digit");
+  }
+
+  Token *tok = new_token(TK_NUM, start, p);
+  tok->val = val;
+  return tok;
+}
+
 // Initialize line info for all tokens.
 internal void add_line_numbers(Token *tok)
 {
@@ -345,10 +372,8 @@ internal Token *tokenize(char *filename, char *p)
 
         // Numeric literal
         if (isdigit(*p)) {
-            cur = cur->next = new_token(TK_NUM, p, p);
-            char *q = p;
-            cur->val = strtoull(p, &p, 10);
-            cur->len = p - q;
+            cur = cur->next = read_int_literal(p);
+            p += cur->len;
             continue;
         }
 

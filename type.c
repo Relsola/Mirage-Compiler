@@ -53,8 +53,14 @@ Type *array_of(Type *base, int len)
     return ty;
 }
 
-Type *enum_type(void) {
-  return new_type(TY_ENUM, 4, 4);
+Type *enum_type(void)
+{
+    return new_type(TY_ENUM, 4, 4);
+}
+
+Type *struct_type(void)
+{
+    return new_type(TY_STRUCT, 0, 1);
 }
 
 internal Type *get_common_type(Type *ty1, Type *ty2)
@@ -112,6 +118,10 @@ void add_type(Node *node)
     case ND_SUB:
     case ND_MUL:
     case ND_DIV:
+    case ND_MOD:
+    case ND_BITAND:
+    case ND_BITOR:
+    case ND_BITXOR:
         usual_arith_conv(&node->lhs, &node->rhs);
         node->ty = node->lhs->ty;
         return;
@@ -140,8 +150,26 @@ void add_type(Node *node)
     case ND_FUNCALL:
         node->ty = ty_long;
         return;
+    case ND_NOT:
+    case ND_LOGOR:
+    case ND_LOGAND:
+        node->ty = ty_int;
+        return;
+    case ND_BITNOT:
+    case ND_SHL:
+    case ND_SHR:
+        node->ty = node->lhs->ty;
+        return;
     case ND_VAR:
         node->ty = node->var->ty;
+        return;
+    case ND_COND:
+        if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
+            node->ty = ty_void;
+        } else {
+            usual_arith_conv(&node->then, &node->els);
+            node->ty = node->then->ty;
+        }
         return;
     case ND_COMMA:
         node->ty = node->rhs->ty;

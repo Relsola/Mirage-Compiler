@@ -230,6 +230,58 @@ void gen_expr(Node *node)
             gen_stmt(n);
         }
         return;
+    case ND_COND: {
+        int c = count();
+        gen_expr(node->cond);
+        println("  cmp rax, 0");
+        println("  je .L.else.%d", c);
+        gen_expr(node->then);
+        println("  jmp .L.end.%d", c);
+        println(".L.else.%d:", c);
+        gen_expr(node->els);
+        println(".L.end.%d:", c);
+        return;
+    }
+    case ND_NOT:
+        gen_expr(node->lhs);
+        println("  cmp rax, 0");
+        println("  sete al");
+        println("  movsx rax, al");
+        return;
+    case ND_BITNOT:
+        gen_expr(node->lhs);
+        println("  not rax");
+        return;
+      case ND_LOGAND: {
+          int c = count();
+          gen_expr(node->lhs);
+          println("  cmp rax, 0");
+          println("  je .L.false.%d", c);
+          gen_expr(node->rhs);
+          println("  cmp rax, 0");
+          println("  je .L.false.%d", c);
+          println("  mov rax, 1");
+          println("  jmp .L.end.%d", c);
+          println(".L.false.%d:", c);
+          println("  mov rax, 0");
+          println(".L.end.%d:", c);
+          return;
+      }
+      case ND_LOGOR: {
+          int c = count();
+          gen_expr(node->lhs);
+          println("  cmp rax, 0");
+          println("  jne .L.true.%d", c);
+          gen_expr(node->rhs);
+          println("  cmp rax, 0");
+          println("  jne .L.true.%d", c);
+          println("  mov rax, 0");
+          println("  jmp .L.end.%d", c);
+          println(".L.true.%d:", c);
+          println("  mov rax, 1");
+          println(".L.end.%d:", c);
+          return;
+      }
     case ND_FUNCALL: {
         int nargs = 0;
         for (Node *arg = node->args; arg; arg = arg->next) {
@@ -278,17 +330,31 @@ void gen_expr(Node *node)
         println("  imul %s, %s", rax, r10);
         return;
     case ND_DIV:
+    case ND_MOD:
         if (node->lhs->ty->size == 8) {
             println("  cqo");
         } else {
             println("  cdq");
         }
         println("  idiv  %s", r10);
+
+        if (node->kind == ND_MOD) {
+            println("  mov rax, rdx");
+        }
+        return;
+    case ND_BITAND:
+        println("  and rax, r10");
+        return;
+    case ND_BITOR:
+        println("  or rax, r10");
+        return;
+    case ND_BITXOR:
+        println("  xor rax, r10");
         return;
     case ND_EQ:
     case ND_NE:
-    case ND_LE:
     case ND_LT:
+    case ND_LE:
         println("  cmp %s, %s", rax, r10);
 
         if (node->kind == ND_EQ) {
@@ -302,6 +368,14 @@ void gen_expr(Node *node)
         }
 
         println("  movzx rax, al");
+        return;
+    case ND_SHL:
+        println("  mov rcx, r10");
+        println("  shl %s, cl", rax);
+        return;
+    case ND_SHR:
+        println("  mov rcx, r10");
+        println("  sar %s, cl", rax);
         return;
     default:
         error_tok(node->tok, "invalid expression");
@@ -334,20 +408,49 @@ internal void gen_stmt(Node *node)
         if (node->cond) {
             gen_expr(node->cond);
             println("  cmp rax, 0");
-            println("  je .L.end.%d", c);
+            println("  je %s", node->brk_label);
         }
         gen_stmt(node->then);
+        println("%s:", node->cont_label);
         if (node->inc) {
             gen_expr(node->inc);
         }
         println("  jmp .L.begin.%d", c);
-        println(".L.end.%d:", c);
+        println("%s:", node->brk_label);
         return;
     }
+    case ND_SWITCH:
+        gen_expr(node->cond);
+
+        for (Node *n = node->case_next; n; n = n->case_next) {
+            char *reg = (node->cond->ty->size == 8) ? "rax" : "eax";
+            println("  cmp %s, %ld", reg, n->val);
+            println("  je %s", n->label);
+        }
+
+        if (node->default_case) {
+            println("  jmp %s", node->default_case->label);
+        }
+
+        println("  jmp %s", node->brk_label);
+        gen_stmt(node->then);
+        println("%s:", node->brk_label);
+        return;
+    case ND_CASE:
+        println("%s:", node->label);
+        gen_stmt(node->lhs);
+        return;
     case ND_BLOCK:
         for (Node *n = node->body; n; n = n->next) {
             gen_stmt(n);
         }
+        return;
+    case ND_GOTO:
+        println("  jmp %s", node->unique_label);
+        return;
+    case ND_LABEL:
+        println("%s:", node->unique_label);
+        gen_stmt(node->lhs);
         return;
     case ND_RETURN:
         gen_expr(node->lhs);
