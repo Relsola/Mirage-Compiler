@@ -92,6 +92,7 @@ struct Obj
     // Global variable or function
     bool is_function;
     bool is_definition;
+    bool is_static;
 
     // Global variable
     char *init_data;
@@ -128,6 +129,7 @@ typedef enum
     ND_STMT_EXPR, // Statement expression
     ND_VAR,       // Variable
     ND_NUM,       // Integer
+    ND_CAST,      // Type cast
 
     ND_COMMA,     // internal feature
 } NodeKind;
@@ -158,12 +160,14 @@ struct Node
 
     // Function call
     char *funcname;
+    Type *func_ty;
     Node *args;
 
     Obj *var; // Used if kind == ND_VAR
     i64 val;  // Used if kind == ND_NUM
 };
 
+Node *new_cast(Node *expr, Type *ty);
 Obj *parse(Token *tok);
 
 //
@@ -173,10 +177,12 @@ Obj *parse(Token *tok);
 typedef enum
 {
     TY_VOID,
+    TY_BOOL,
     TY_CHAR,
     TY_SHORT,
     TY_INT,
     TY_LONG,
+    TY_ENUM,
     TY_PTR,
     TY_FUNC,
     TY_ARRAY,
@@ -225,6 +231,7 @@ struct Member
 };
 
 extern Type *ty_void;
+extern Type *ty_bool;
 
 extern Type *ty_char;
 extern Type *ty_short;
@@ -236,6 +243,7 @@ Type *copy_type(Type *ty);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int length);
+Type *enum_type(void);
 void add_type(Node *node);
 
 //

@@ -91,10 +91,15 @@ internal void load(Type *ty)
         return;
     }
 
+    // When we load a char or a short value to a register, we always
+    // extend them to the size of int, so we can assume the lower half of
+    // a register always contains a valid value. The upper half of a
+    // register for char, short and int may contain garbage. When we load
+    // a long value to a register, it simply occupies the entire register.
     if (ty->size == 1) {
-        println("  movsx rax, byte ptr [rax]");
+        println("  movsx eax, byte ptr [rax]");
     } else if (ty->size == 2) {
-        println("  movsx rax, word ptr [rax]");
+        println("  movsx eax, word ptr [rax]");
     } else if (ty->size == 4) {
         println("  movsxd rax, dword ptr [rax]");
     } else {
@@ -126,11 +131,69 @@ internal void store(Type *ty)
     }
 }
 
+internal void cmp_zero(Type *ty)
+{
+    if (is_integer(ty) && ty->size <= 4) {
+        println("  cmp eax, 0");
+    } else {
+        println("  cmp rax, 0");
+    }
+}
+
+enum { I8, I16, I32, I64 };
+
+internal int getTypeId(Type *ty)
+{
+    switch (ty->kind) {
+    case TY_CHAR:
+        return I8;
+    case TY_SHORT:
+        return I16;
+    case TY_INT:
+        return I32;
+    default:
+        return I64;
+    }
+}
+
+// The table for type casts
+internal char i32i8[] = "movsx eax, al";
+internal char i32i16[] = "movsx eax, ax";
+internal char i32i64[] = "movsxd rax, eax";
+
+internal char *cast_table[][10] = {
+    // i8    i16     i32   i64
+    { NULL,  NULL,   NULL, i32i64 },   // i8
+    { i32i8, NULL,   NULL, i32i64 },   // i16
+    { i32i8, i32i16, NULL, i32i64 },   // i32
+    { i32i8, i32i16, NULL, NULL   },   // i64
+};
+
+internal void cast(Type *from, Type *to)
+{
+    if (to->kind == TY_VOID) {
+        return;
+    }
+
+    if (to->kind == TY_BOOL) {
+        cmp_zero(from);
+        println("  setne al");
+        println("  movsx eax, al");
+        return;
+    }
+
+    int t1 = getTypeId(from);
+    int t2 = getTypeId(to);
+    if (cast_table[t1][t2]) {
+        println("  %s", cast_table[t1][t2]);
+    }
+}
+
 void gen_expr(Node *node)
 {
     switch (node->kind) {
     case ND_NUM:
-        println("  mov rax, %ld", node->val);
+        println("  mov rax, %lld", node->val);
         return;
     case ND_NEG:
         gen_expr(node->lhs);
@@ -151,6 +214,10 @@ void gen_expr(Node *node)
     case ND_COMMA:
         gen_expr(node->lhs);
         gen_expr(node->rhs);
+        return;
+    case ND_CAST:
+        gen_expr(node->lhs);
+        cast(node->lhs->ty, node->ty);
         return;
     case ND_ASSIGN:
         gen_addr(node->lhs);
@@ -359,7 +426,9 @@ internal void emit_text(Obj *prog)
             continue;
         }
 
-        println("  .globl %s", fn->name);
+        if (!fn->is_static) {
+            println("  .globl %s", fn->name);
+        }
         println("  .text");
         println("%s:", fn->name);
         current_fn = fn;
