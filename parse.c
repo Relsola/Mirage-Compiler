@@ -60,6 +60,34 @@ struct VarAttr
     bool is_static;
 };
 
+// This struct represents a variable initializer. Since initializers
+// can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this struct
+// is a tree data structure.
+typedef struct Initializer Initializer;
+struct Initializer
+{
+    Initializer *next;
+    Type *ty;
+    Token *tok;
+
+    // If it's not an aggregate type and has an initializer,
+    // `expr` has an initialization expression.
+    Node *expr;
+
+    // If it's an initializer for an aggregate type (e.g. array or struct),
+    // `children` has initializers for its children.
+    Initializer **children;
+};
+
+// For local variable initializer.
+typedef struct InitDesg InitDesg;
+struct InitDesg
+{
+    InitDesg *next;
+    int idx;
+    Obj *var;
+};
+
 // All local variable instances created during parsing are
 // accumulated to this list.
 global_variable Obj *locals;
@@ -91,6 +119,9 @@ internal Type *enum_specifier(Token **rest, Token *tok);
 internal Type *type_suffix(Token **rest, Token *tok, Type *ty);
 internal Type *declarator(Token **rest, Token *tok, Type *ty);
 internal Node *declaration(Token **rest, Token *tok, Type *basety);
+internal void initializer2(Token **rest, Token *tok, Initializer *init);
+internal Initializer *initializer(Token **rest, Token *tok, Type *ty);
+internal Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
 internal Node *compound_stmt(Token **rest, Token *tok);
 internal Node *stmt(Token **rest, Token *tok);
 internal Node *expr_stmt(Token **rest, Token *tok);
@@ -218,6 +249,21 @@ internal VarScope *push_scope(char *name)
     sc->next = scope->vars;
     scope->vars = sc;
     return sc;
+}
+
+internal Initializer *new_initializer(Type *ty)
+{
+    Initializer *init = calloc(1, sizeof(Initializer));
+    init->ty = ty;
+
+    if (ty->kind == TY_ARRAY) {
+        init->children = calloc(ty->array_len, sizeof(Initializer *));
+        for (int i = 0; i < ty->array_len; i++) {
+            init->children[i] = new_initializer(ty->base);
+        }
+    }
+
+    return init;
 }
 
 internal Obj *new_var(char *name, Type *ty)
@@ -609,20 +655,135 @@ internal Node *declaration(Token **rest, Token *tok, Type *basety)
 
         Obj *var = new_lvar(get_ident(ty->name), ty);
 
-        if (!equal(tok, "=")) {
-            continue;
+        if (equal(tok, "=")) {
+            Node *expr = lvar_initializer(&tok, tok->next, var);
+            cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);
         }
-
-        Node *lhs = new_var_node(var, ty->name);
-        Node *rhs = assign(&tok, tok->next);
-        Node *node = new_binary(ND_ASSIGN, lhs, rhs, tok);
-        cur = cur->next = new_unary(ND_EXPR_STMT, node, tok);
     }
 
     Node *node = new_node(ND_BLOCK, tok);
     node->body = head.next;
     *rest = tok->next;
     return node;
+}
+
+internal Token *skip_excess_element(Token *tok)
+{
+    if (equal(tok, "{")) {
+        tok = skip_excess_element(tok->next);
+        return skip(tok, "}");
+    }
+
+    assign(&tok, tok);
+    return tok;
+}
+
+// string-initializer = string-literal
+internal void string_initializer(Token **rest, Token *tok, Initializer *init)
+{
+    int len = MIN(init->ty->array_len, tok->ty->array_len);
+    for (int i = 0; i < len; i++) {
+        init->children[i]->expr = new_num(tok->str[i], tok);
+    }
+    *rest = tok->next;
+}
+
+// array-initializer = "{" initializer ("," initializer)* "}"
+internal void array_initializer(Token **rest, Token *tok, Initializer *init)
+{
+    tok = skip(tok, "{");
+
+    for (int i = 0; !consume(rest, tok, "}"); i++) {
+        if (i > 0) {
+            tok = skip(tok, ",");
+        }
+
+        if (i < init->ty->array_len) {
+            initializer2(&tok, tok, init->children[i]);
+        } else {
+            tok = skip_excess_element(tok);
+        }
+    }
+}
+
+// initializer = string-initializer | array-initializer | assign
+internal void initializer2(Token **rest, Token *tok, Initializer *init)
+{
+    if (init->ty->kind == TY_ARRAY && tok->kind == TK_STR) {
+        string_initializer(rest, tok, init);
+        return;
+    }
+
+    if (init->ty->kind == TY_ARRAY) {
+        array_initializer(rest, tok, init);
+        return;
+    }
+
+    init->expr = assign(rest, tok);
+}
+
+internal Initializer *initializer(Token **rest, Token *tok, Type *ty)
+{
+    Initializer *init = new_initializer(ty);
+    initializer2(rest, tok, init);
+    return init;
+}
+
+internal Node *init_desg_expr(InitDesg *desg, Token *tok)
+{
+    if (desg->var) {
+        return new_var_node(desg->var, tok);
+    }
+
+    Node *lhs = init_desg_expr(desg->next, tok);
+    Node *rhs = new_num(desg->idx, tok);
+    return new_unary(ND_DEREF, new_add(lhs, rhs, tok), tok);
+}
+
+internal Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token *tok)
+{
+    if (ty->kind == TY_ARRAY) {
+        Node *node = new_node(ND_NULL_EXPR, tok);
+        for (int i = 0; i < ty->array_len; i++) {
+            InitDesg desg2 = { desg, i };
+            Node *rhs = create_lvar_init(init->children[i], ty->base, &desg2, tok);
+            node = new_binary(ND_COMMA, node, rhs, tok);
+        }
+        return node;
+    }
+
+    if (!init->expr) {
+        return new_node(ND_NULL_EXPR, tok);
+    }
+
+    Node *lhs = init_desg_expr(desg, tok);
+    return new_binary(ND_ASSIGN, lhs, init->expr, tok);
+}
+
+// A variable definition with an initializer is a shorthand notation
+// for a variable definition followed by assignments. This function
+// generates assignment expressions for an initializer. For example,
+// `int x[2][2] = {{6, 7}, {8, 9}}` is converted to the following
+// expressions:
+//
+//   x[0][0] = 6;
+//   x[0][1] = 7;
+//   x[1][0] = 8;
+//   x[1][1] = 9;
+internal Node *lvar_initializer(Token **rest, Token *tok, Obj *var)
+{
+    Initializer *init = initializer(rest, tok, var->ty);
+    InitDesg desg = { NULL, 0, var };
+
+    // If a partial initializer list is given, the standard requires
+    // that unspecified elements are set to 0. Here, we simply
+    // zero-initialize the entire memory region of a variable before
+    // initializing it with user-supplied values.
+    Node *lhs = new_node(ND_MEMZERO, tok);
+    lhs->var = var;
+
+    Node *rhs = create_lvar_init(init, var->ty, &desg, tok);
+    return new_binary(ND_COMMA, lhs, rhs, tok);
 }
 
 // Returns true if a given token represents a type.

@@ -192,6 +192,8 @@ internal void cast(Type *from, Type *to)
 void gen_expr(Node *node)
 {
     switch (node->kind) {
+    case ND_NULL_EXPR:
+        return;
     case ND_NUM:
         println("  mov rax, %lld", node->val);
         return;
@@ -218,6 +220,12 @@ void gen_expr(Node *node)
     case ND_CAST:
         gen_expr(node->lhs);
         cast(node->lhs->ty, node->ty);
+        return;
+    case ND_MEMZERO:
+        println("  mov rcx, %d", node->var->ty->size);
+        println("  lea rdi, [rbp - %d]", node->var->offset);
+        println("  mov al, 0");
+        println("  rep stosb");
         return;
     case ND_ASSIGN:
         gen_addr(node->lhs);

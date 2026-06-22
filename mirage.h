@@ -16,6 +16,9 @@
 #define __attribute__(x)
 #endif
 
+#define MAX(x, y) ((x) < (y) ? (y) : (x))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
 typedef int8_t i8;
 typedef int16_t i16;
 typedef int32_t i32;
@@ -107,6 +110,7 @@ struct Obj
 // AST node
 typedef enum
 {
+    ND_NULL_EXPR, // Do nothing
     ND_ADD,       // +
     ND_SUB,       // -
     ND_MUL,       // *
@@ -145,6 +149,7 @@ typedef enum
     ND_VAR,       // Variable
     ND_NUM,       // Integer
     ND_CAST,      // Type cast
+    ND_MEMZERO,   // Zero-clear a stack variable
 
     ND_COMMA, // internal feature
 } NodeKind;
