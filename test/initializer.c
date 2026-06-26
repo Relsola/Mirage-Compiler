@@ -28,6 +28,14 @@ struct {int a[2];} g41[2] = {1, 2, 3, 4};
 char g43[][4] = {'f', 'o', 'o', 0, 'b', 'a', 'r', 0};
 char *g44 = {"foo"};
 
+typedef char T60[];
+T60 g60 = {1, 2, 3};
+T60 g61 = {1, 2, 3, 4, 5, 6};
+
+typedef struct { char a, b[]; } T65;
+T65 g65 = {'f','o','o',0};
+T65 g66 = {'f','o','o','b','a','r',0};
+
 int main() {
   ASSERT(1, ({ int x[3]={1,2,3}; x[0]; }));
   ASSERT(2, ({ int x[3]={1,2,3}; x[1]; }));

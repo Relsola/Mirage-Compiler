@@ -70,7 +70,7 @@ __attribute__((noreturn)) void error(char *fmt, ...);
 __attribute__((noreturn)) void error_at(char *loc, char *fmt, ...);
 __attribute__((noreturn)) void error_tok(Token *tok, char *fmt, ...);
 
-#define unreachable() error("internal error at %s:%d", __FILE__, __LINE__)
+#define m__unreachable() error("internal error at %s:%d", __FILE__, __LINE__)
 
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *s);
@@ -89,6 +89,7 @@ struct Obj
     char *name;    // Variable name
     Type *ty;      // Type
     bool is_local; // local or global/function
+    int align;     // alignment
 
     // Local variable
     int offset;
@@ -264,6 +265,7 @@ struct Type
 
     // Struct
     Member *members;
+    bool is_flexible;
 
     // Function type
     Type *return_ty;
@@ -279,6 +281,7 @@ struct Member
     Token *tok; // for error message
     Token *name;
     int idx;
+    int align;
     int offset;
 };
 

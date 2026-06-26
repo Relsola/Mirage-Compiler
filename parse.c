@@ -58,6 +58,8 @@ struct VarAttr
 {
     bool is_typedef;
     bool is_static;
+    bool is_extern;
+    int align;
 };
 
 // This struct represents a variable initializer. Since initializers
@@ -114,13 +116,13 @@ internal char *cont_label;
 // a switch statement. Otherwise, NULL.
 internal Node *current_switch;
 
+internal Type *typename(Token **rest, Token *tok);
 internal bool is_typename(Token *tok);
-internal i64 const_expr(Token **rest, Token *tok);
 internal Type *declspec(Token **rest, Token *tok, VarAttr *attr);
 internal Type *enum_specifier(Token **rest, Token *tok);
 internal Type *type_suffix(Token **rest, Token *tok, Type *ty);
 internal Type *declarator(Token **rest, Token *tok, Type *ty);
-internal Node *declaration(Token **rest, Token *tok, Type *basety);
+internal Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 internal void initializer2(Token **rest, Token *tok, Initializer *init);
 internal Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
 internal Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
@@ -150,9 +152,13 @@ internal Node *postfix(Token **rest, Token *tok);
 internal Node *unary(Token **rest, Token *tok);
 internal Node *primary(Token **rest, Token *tok);
 internal Token *parse_typedef(Token *tok, Type *basety);
-internal int64_t eval(Node *node);
-internal int64_t eval2(Node *node, char **label);
-internal int64_t eval_rval(Node *node, char **label);
+internal bool is_function(Token *tok);
+internal Token *function(Token *tok, Type *basety, VarAttr *attr);
+internal Token *global_var(Token *tok, Type *basety, VarAttr *attr);
+internal i64 const_expr(Token **rest, Token *tok);
+internal i64 eval(Node *node);
+internal i64 eval2(Node *node, char **label);
+internal i64 eval_rval(Node *node, char **label);
 
 internal void enter_scope(void)
 {
@@ -284,7 +290,14 @@ internal Initializer *new_initializer(Type *ty, bool is_flexible)
         init->children = calloc(len, sizeof(Initializer *));
 
         for (Member *mem = ty->members; mem; mem = mem->next) {
-            init->children[mem->idx] = new_initializer(mem->ty, false);
+            if (is_flexible && ty->is_flexible && !mem->next) {
+                Initializer *child = calloc(1, sizeof(Initializer));
+                child->ty = mem->ty;
+                child->is_flexible = true;
+                init->children[mem->idx] = child;
+            } else {
+                init->children[mem->idx] = new_initializer(mem->ty, false);
+            }
         }
         return init;
     }
@@ -297,6 +310,7 @@ internal Obj *new_var(char *name, Type *ty)
     Obj *var = calloc(1, sizeof(Obj));
     var->name = name;
     var->ty = ty;
+    var->align = ty->align;
     push_scope(name)->var = var;
     return var;
 }
@@ -314,6 +328,7 @@ internal Obj *new_gvar(char *name, Type *ty)
 {
     Obj *var = new_var(name, ty);
     var->next = globals;
+    var->is_definition = true;
     globals = var;
     return var;
 }
@@ -365,7 +380,7 @@ internal void push_tag_scope(Token *tok, Type *ty)
 }
 
 // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
-//             | "typedef" | "static"
+//             | "typedef" | "static" | "extern"
 //             | struct-decl | union-decl | typedef-name
 //             | enum-specifier)+
 //
@@ -402,22 +417,39 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
 
     while (is_typename(tok)) {
         // Handle storage class specifiers.
-        if (equal(tok, "typedef") || equal(tok, "static")) {
+        if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern")) {
             if (!attr) {
                 error_tok(tok, "storage class specifier is not allowed in this context");
             }
 
             if (equal(tok, "typedef")) {
                 attr->is_typedef = true;
-            } else {
+            } else if (equal(tok, "static")) {
                 attr->is_static = true;
+            } else {
+                attr->is_extern = true;
             }
 
-            if (attr->is_typedef + attr->is_static > 1) {
-                error_tok(tok, "typedef and static may not be used together");
+            if (attr->is_typedef + attr->is_static + attr->is_extern > 1) {
+                error_tok(tok, "typedef may not be used together with static or extern");
             }
 
             tok = tok->next;
+            continue;
+        }
+
+        if (equal(tok, "_Alignas")) {
+            if (!attr) {
+                error_tok(tok, "_Alignas is not allowed in this context");
+            }
+            tok = skip(tok->next, "(");
+
+            if (is_typename(tok)) {
+                attr->align = typename(&tok, tok)->align;
+            } else {
+                attr->align = const_expr(&tok, tok);
+            }
+            tok = skip(tok, ")");
             continue;
         }
 
@@ -451,7 +483,7 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
         else if (equal(tok, "short"))  { counter += SHORT; }
         else if (equal(tok, "int"))    { counter += INT;   }
         else if (equal(tok, "long"))   { counter += LONG;  }
-        else                           { unreachable();    }
+        else                           { m__unreachable();    }
 
         switch (counter) {
         case VOID:
@@ -487,10 +519,15 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
     return ty;
 }
 
-// func-params = (param ("," param)*)? ")"
+// func-params = ("void" | param ("," param)*)? ")"
 // param       = declspec declarator
 internal Type *func_params(Token **rest, Token *tok, Type *ty)
 {
+    if (equal(tok, "void") && equal(tok->next, ")")) {
+        *rest = tok->next->next;
+        return func_type(ty);
+    }
+
     Type head = {};
     Type *cur = &head;
 
@@ -678,7 +715,7 @@ internal Type *enum_specifier(Token **rest, Token *tok) {
 }
 
 // declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
-internal Node *declaration(Token **rest, Token *tok, Type *basety)
+internal Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr)
 {
     Node head = {};
     Node *cur = &head;
@@ -696,6 +733,9 @@ internal Node *declaration(Token **rest, Token *tok, Type *basety)
         }
 
         Obj *var = new_lvar(get_ident(ty->name), ty);
+        if (attr && attr->align) {
+            var->align = attr->align;
+        }
 
         if (equal(tok, "=")) {
             Node *expr = lvar_initializer(&tok, tok->next, var);
@@ -898,10 +938,41 @@ internal void initializer2(Token **rest, Token *tok, Initializer *init)
     init->expr = assign(rest, tok);
 }
 
+internal Type *copy_struct_type(Type *ty)
+{
+    ty = copy_type(ty);
+
+    Member head = {};
+    Member *cur = &head;
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+        Member *m = calloc(1, sizeof(Member));
+        *m = *mem;
+        cur = cur->next = m;
+    }
+
+    ty->members = head.next;
+    return ty;
+}
+
 internal Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty)
 {
     Initializer *init = new_initializer(ty, true);
     initializer2(rest, tok, init);
+
+    if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
+        ty = copy_struct_type(ty);
+
+        Member *mem = ty->members;
+        while (mem->next) {
+            mem = mem->next;
+        }
+        mem->ty = init->children[mem->idx]->ty;
+        ty->size += mem->ty->size;
+
+        *new_ty = ty;
+        return init;
+    }
+
     *new_ty = init->ty;
     return init;
 }
@@ -996,7 +1067,7 @@ internal void write_buf(char *buf, u64 val, int size)
     } else if (size == 8) {
         *(u64 *)buf = val;
     } else {
-        unreachable();
+        m__unreachable();
     }
 }
 
@@ -1061,7 +1132,8 @@ internal bool is_typename(Token *tok)
 {
     local_persist char *kw[] = {
         "void", "_Bool", "bool", "char", "short", "int", "long",
-        "struct", "union", "typedef", "enum", "static"
+        "struct", "union", "typedef", "enum", "static", "extern",
+        "_Alignas"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); ++i) {
@@ -1092,7 +1164,17 @@ internal Node *compound_stmt(Token **rest, Token *tok)
                 continue;
             }
 
-            cur = cur->next = declaration(&tok, tok, basety);
+            if (is_function(tok)) {
+                tok = function(tok, basety, &attr);
+                continue;
+            }
+
+            if (attr.is_extern) {
+                tok = global_var(tok, basety, &attr);
+                continue;
+            }
+
+            cur = cur->next = declaration(&tok, tok, basety, &attr);
         } else {
             cur = cur->next = stmt(&tok, tok);
         }
@@ -1205,7 +1287,7 @@ internal Node *stmt(Token **rest, Token *tok)
 
         if (is_typename(tok)) {
             Type *basety = declspec(&tok, tok, NULL);
-            node->init = declaration(&tok, tok, basety);
+            node->init = declaration(&tok, tok, basety, NULL);
         } else {
             node->init = expr_stmt(&tok, tok);
         }
@@ -1872,7 +1954,8 @@ internal void struct_members(Token **rest, Token *tok, Type *ty)
     int idx = 0;
 
     while (!equal(tok, "}")) {
-        Type *basety = declspec(&tok, tok, NULL);
+        VarAttr attr = {};
+        Type *basety = declspec(&tok, tok, &attr);
         bool first = true;
 
         while (!consume(&tok, tok, ";")) {
@@ -1885,8 +1968,17 @@ internal void struct_members(Token **rest, Token *tok, Type *ty)
             mem->ty = declarator(&tok, tok, basety);
             mem->name = mem->ty->name;
             mem->idx = idx++;
+            mem->align = attr.align ? attr.align : mem->ty->align;
             cur = cur->next = mem;
         }
+    }
+
+    // If the last element is an array of incomplete type, it's
+    // called a "flexible array member". It should behave as if
+    // if were a zero-sized array.
+    if (cur != &head && cur->ty->kind == TY_ARRAY && cur->ty->array_len < 0) {
+        cur->ty = array_of(cur->ty->base, 0);
+        ty->is_flexible = true;
     }
 
     *rest = tok->next;
@@ -1952,12 +2044,12 @@ internal Type *struct_decl(Token **rest, Token *tok)
     // Assign offsets within the struct to members.
     int offset = 0;
     for (Member *mem = ty->members; mem; mem = mem->next) {
-        offset = align_to(offset, mem->ty->align);
+        offset = align_to(offset, mem->align);
         mem->offset = offset;
         offset += mem->ty->size;
 
-        if (ty->align < mem->ty->align) {
-            ty->align = mem->ty->align;
+        if (ty->align < mem->align) {
+            ty->align = mem->align;
         }
     }
     ty->size = align_to(offset, ty->align);
@@ -1978,8 +2070,8 @@ internal Type *union_decl(Token **rest, Token *tok)
     // are already initialized to zero. We need to compute the
     // alignment and the size though.
     for (Member *mem = ty->members; mem; mem = mem->next) {
-        if (ty->align < mem->ty->align) {
-            ty->align = mem->ty->align;
+        if (ty->align < mem->align) {
+            ty->align = mem->align;
         }
         if (ty->size < mem->ty->size) {
             ty->size = mem->ty->size;
@@ -2118,6 +2210,7 @@ internal Node *funcall(Token **rest, Token *tok)
 //         | "(" expr ")"
 //         | "sizeof" "(" type-name ")"
 //         | "sizeof" unary
+//         | "_Alignof" "(" type-name ")"
 //         | ident func-args?
 //         | str
 //         | num
@@ -2149,6 +2242,18 @@ internal Node *primary(Token **rest, Token *tok)
         Node *node = unary(rest, tok->next);
         add_type(node);
         return new_num(node->ty->size, tok);
+    }
+
+    if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
+        Type *ty = typename(&tok, tok->next->next);
+        *rest = skip(tok, ")");
+        return new_num(ty->align, tok);
+    }
+
+    if (equal(tok, "_Alignof")) {
+        Node *node = unary(rest, tok->next);
+        add_type(node);
+        return new_num(node->ty->align, tok);
     }
 
     if (tok->kind == TK_IDENT) {
@@ -2220,7 +2325,7 @@ internal void create_param_lvars(Type *param)
 // We cannot resolve gotos as we parse a function because gotos
 // can refer a label that appears later in the function.
 // So, we need to do this after we parse the entire function.
-static void resolve_goto_labels(void)
+internal void resolve_goto_labels(void)
 {
     for (Node *x = gotos; x; x = x->goto_next) {
         for (Node *y = labels; y; y = y->goto_next) {
@@ -2265,7 +2370,7 @@ internal Token *function(Token *tok, Type *basety, VarAttr *attr)
     return tok;
 }
 
-internal Token *global_var(Token *tok, Type *basety)
+internal Token *global_var(Token *tok, Type *basety, VarAttr *attr)
 {
     bool first = true;
 
@@ -2277,6 +2382,11 @@ internal Token *global_var(Token *tok, Type *basety)
 
         Type *ty = declarator(&tok, tok, basety);
         Obj *var = new_gvar(get_ident(ty->name), ty);
+        var->is_definition = !attr->is_extern;
+        if (attr->align) {
+            var->align = attr->align;
+        }
+
         if (equal(tok, "=")) {
             gvar_initializer(&tok, tok->next, var);
         }
@@ -2320,7 +2430,7 @@ Obj *parse(Token *tok)
         }
 
         // Global variable
-        tok = global_var(tok, basety);
+        tok = global_var(tok, basety, &attr);
     }
 
     return globals;

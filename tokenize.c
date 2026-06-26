@@ -143,7 +143,8 @@ internal bool is_keyword(Token *tok)
     local_persist char *kw[] = {
         "void", "char", "short", "long", "int", "struct", "union", "_Bool",
         "return", "if", "else", "for", "while", "sizeof", "typedef", "enum",
-        "static", "goto", "break", "continue", "switch", "case", "default"
+        "static", "goto", "break", "continue", "switch", "case", "default",
+        "extern", "_Alignof", "_Alignas",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {

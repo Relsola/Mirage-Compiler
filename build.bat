@@ -5,11 +5,11 @@ cd /D "%~dp0"
 if /I "%~1"=="test" goto test
 if /I "%~1"=="clean" goto clean
 
-clang -std=c99 -O0 -g -Wall -o mirage.exe main.c tokenize.c parse.c codegen.c type.c string.c
+clang -std=c23 -O0 -g -Wall -o mirage.exe main.c tokenize.c parse.c codegen.c type.c string.c
 exit /b 0
 
 :test
-clang -std=c99 -O2 -o mirage.exe main.c tokenize.c parse.c codegen.c type.c string.c
+clang -std=c23 -O2 -o mirage.exe main.c tokenize.c parse.c codegen.c type.c string.c
 for %%f in (test\*.c) do (
     echo ---------------------- %%~nf start ----------------------
     set "_s=test\%%~nf.s"

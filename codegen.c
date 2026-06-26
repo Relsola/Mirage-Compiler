@@ -57,7 +57,7 @@ internal void gen_addr(Node *node)
     case ND_VAR:
         if (node->var->is_local) {
             // Local variable
-            println("  lea rax, [rbp - %d]", node->var->offset);
+            println("  lea rax, [rbp + %d]", node->var->offset);
         } else {
             println("  lea rax, [rip + %s]", node->var->name);
         }
@@ -223,7 +223,7 @@ void gen_expr(Node *node)
         return;
     case ND_MEMZERO:
         println("  mov rcx, %d", node->var->ty->size);
-        println("  lea rdi, [rbp - %d]", node->var->offset);
+        println("  lea rdi, [rbp + %d]", node->var->offset);
         println("  mov al, 0");
         println("  rep stosb");
         return;
@@ -483,8 +483,8 @@ internal void assign_lvar_offsets(Obj *prog)
         int offset = 0;
         for (Obj *var = fn->locals; var; var = var->next) {
             offset += var->ty->size;
-            offset = align_to(offset, var->ty->align);
-            var->offset = offset;
+            offset = align_to(offset, var->align);
+            var->offset = -offset;
         }
         fn->stack_size = align_to(offset, 16);
     }
@@ -493,15 +493,17 @@ internal void assign_lvar_offsets(Obj *prog)
 internal void emit_data(Obj *prog)
 {
     for (Obj *var = prog; var; var = var->next) {
-        if (var->is_function) {
+        if (var->is_function || !var->is_definition) {
             continue;
         }
 
-        println("  .data");
         println("  .globl %s", var->name);
-        println("%s:", var->name);
+        println("  .align %d", var->align);
 
         if (var->init_data) {
+            println("  .data");
+            println("%s:", var->name);
+
             Relocation *rel = var->rel;
             int pos = 0;
             while (pos < var->ty->size) {
@@ -513,9 +515,12 @@ internal void emit_data(Obj *prog)
                     println("  .byte %d", var->init_data[pos++]);
                 }
             }
-        } else {
-            println("  .zero %d", var->ty->size);
+            continue;
         }
+
+        println("  .bss");
+        println("%s:", var->name);
+        println("  .zero %d", var->ty->size);
     }
 }
 
@@ -523,19 +528,19 @@ internal void store_gp(int r, int offset, int size)
 {
     switch (size) {
     case 1:
-        println("  mov [rbp - %d] , %s", offset, argreg8[r]);
+        println("  mov [rbp + %d] , %s", offset, argreg8[r]);
         return;
     case 2:
-        println("  mov [rbp - %d] , %s", offset, argreg16[r]);
+        println("  mov [rbp + %d] , %s", offset, argreg16[r]);
         return;
     case 4:
-        println("  mov [rbp - %d] , %s", offset, argreg32[r]);
+        println("  mov [rbp + %d] , %s", offset, argreg32[r]);
         return;
     case 8:
-        println("  mov [rbp - %d] , %s", offset, argreg64[r]);
+        println("  mov [rbp + %d] , %s", offset, argreg64[r]);
         return;
     }
-    unreachable();
+    m__unreachable();
 }
 
 internal void emit_text(Obj *prog)
