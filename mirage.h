@@ -59,7 +59,7 @@ struct Token
     i64 val;        // If kind is TK_NUM, its value
     char *loc;      // Token location
     int len;        // Token length
-    Type *ty;       // Used if TK_STR
+    Type *ty;       // Used if TK_NUM or TK_STR
     char *str;      // String literal contents including terminating '\0'
 
     int line_no; // Line number
@@ -248,6 +248,7 @@ struct Type
     TypeKind kind;
     int size;  // sizeof() value
     int align; // alignment
+    bool is_unsigned;   // unsigned or signed
 
     // Pointer-to or array-of type. We intentionally use the same member
     // to represent pointer/array duality in C.
@@ -295,6 +296,11 @@ extern Type *ty_char;
 extern Type *ty_short;
 extern Type *ty_int;
 extern Type *ty_long;
+
+extern Type *ty_uchar;
+extern Type *ty_ushort;
+extern Type *ty_uint;
+extern Type *ty_ulong;
 
 bool is_integer(Type *ty);
 Type *copy_type(Type *ty);

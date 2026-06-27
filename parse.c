@@ -230,6 +230,14 @@ internal Node *new_num(i64 val, Token *tok)
     return node;
 }
 
+internal Node *new_ulong(i64 val, Token *tok)
+{
+    Node *node = new_node(ND_NUM, tok);
+    node->val = val;
+    node->ty = ty_ulong;
+    return node;
+}
+
 internal Node *new_long(i64 val, Token *tok)
 {
     Node *node = new_node(ND_NUM, tok);
@@ -385,6 +393,7 @@ internal void push_tag_scope(Token *tok, Type *ty)
 
 // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
 //             | "typedef" | "static" | "extern"
+//             | "signed" | "unsigned"
 //             | struct-decl | union-decl | typedef-name
 //             | enum-specifier)+
 //
@@ -407,13 +416,15 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
     // as you can see below.
     enum
     {
-        VOID  = 1 << 0,
-        BOOL  = 1 << 2,
-        CHAR  = 1 << 4,
-        SHORT = 1 << 6,
-        INT   = 1 << 8,
-        LONG  = 1 << 10,
-        OTHER = 1 << 12,
+        VOID     = 1 << 0,
+        BOOL     = 1 << 2,
+        CHAR     = 1 << 4,
+        SHORT    = 1 << 6,
+        INT      = 1 << 8,
+        LONG     = 1 << 10,
+        OTHER    = 1 << 12,
+        SIGNED   = 1 << 13,
+        UNSIGNED = 1 << 14,
     };
 
     Type *ty = ty_int;
@@ -481,13 +492,15 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
         }
 
         // Handle built-in types.
-        if (equal(tok, "void"))        { counter += VOID;  }
-        else if (equal(tok, "char"))   { counter += CHAR;  }
-        else if (equal(tok, "_Bool"))  { counter += BOOL;  }
-        else if (equal(tok, "short"))  { counter += SHORT; }
-        else if (equal(tok, "int"))    { counter += INT;   }
-        else if (equal(tok, "long"))   { counter += LONG;  }
-        else                           { m__unreachable();    }
+        if (equal(tok, "void"))          { counter += VOID;     }
+        else if (equal(tok, "char"))     { counter += CHAR;     }
+        else if (equal(tok, "_Bool"))    { counter += BOOL;     }
+        else if (equal(tok, "short"))    { counter += SHORT;    }
+        else if (equal(tok, "int"))      { counter += INT;      }
+        else if (equal(tok, "long"))     { counter += LONG;     }
+        else if (equal(tok, "signed"))   { counter |= SIGNED;   }
+        else if (equal(tok, "unsigned")) { counter |= UNSIGNED; }
+        else                             { m__unreachable();    }
 
         switch (counter) {
         case VOID:
@@ -497,20 +510,46 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
             ty = ty_bool;
             break;
         case CHAR:
+        case SIGNED + CHAR:
             ty = ty_char;
+            break;
+        case UNSIGNED + CHAR:
+            ty = ty_uchar;
             break;
         case SHORT:
         case SHORT + INT:
+        case SIGNED + SHORT:
+        case SIGNED + SHORT + INT:
             ty = ty_short;
             break;
+        case UNSIGNED + SHORT:
+        case UNSIGNED + SHORT + INT:
+            ty = ty_ushort;
+            break;
         case INT:
+        case SIGNED:
+        case SIGNED + INT:
             ty = ty_int;
+            break;
+        case UNSIGNED:
+        case UNSIGNED + INT:
+            ty = ty_uint;
             break;
         case LONG:
         case LONG + INT:
         case LONG + LONG:
         case LONG + LONG + INT:
+        case SIGNED + LONG:
+        case SIGNED + LONG + INT:
+        case SIGNED + LONG + LONG:
+        case SIGNED + LONG + LONG + INT:
             ty = ty_long;
+            break;
+        case UNSIGNED + LONG:
+        case UNSIGNED + LONG + INT:
+        case UNSIGNED + LONG + LONG:
+        case UNSIGNED + LONG + LONG + INT:
+            ty = ty_ulong;
             break;
         default:
             error_tok(tok, "invalid type");
@@ -1160,7 +1199,7 @@ internal bool is_typename(Token *tok)
     local_persist char *kw[] = {
         "void", "_Bool", "bool", "char", "short", "int", "long",
         "struct", "union", "typedef", "enum", "static", "extern",
-        "_Alignas"
+        "_Alignas", "signed", "unsigned"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); ++i) {
@@ -1474,10 +1513,16 @@ internal i64 eval2(Node *node, char **label)
     case ND_MUL:
         return eval(node->lhs) * eval(node->rhs);
     case ND_DIV:
+        if (node->ty->is_unsigned) {
+            return (u64)eval(node->lhs) / eval(node->rhs);
+        }
         return eval(node->lhs) / eval(node->rhs);
     case ND_NEG:
         return -eval(node->lhs);
     case ND_MOD:
+        if (node->ty->is_unsigned) {
+            return (u64)eval(node->lhs) % eval(node->rhs);
+        }
         return eval(node->lhs) % eval(node->rhs);
     case ND_BITAND:
         return eval(node->lhs) & eval(node->rhs);
@@ -1488,14 +1533,23 @@ internal i64 eval2(Node *node, char **label)
     case ND_SHL:
         return eval(node->lhs) << eval(node->rhs);
     case ND_SHR:
+        if (node->ty->is_unsigned && node->ty->size == 8) {
+            return (u64)eval(node->lhs) >> eval(node->rhs);
+        }
         return eval(node->lhs) >> eval(node->rhs);
     case ND_EQ:
         return eval(node->lhs) == eval(node->rhs);
     case ND_NE:
         return eval(node->lhs) != eval(node->rhs);
     case ND_LT:
+        if (node->lhs->ty->is_unsigned) {
+            return eval(node->lhs) < eval(node->rhs);
+        }
         return eval(node->lhs) < eval(node->rhs);
     case ND_LE:
+        if (node->lhs->ty->is_unsigned) {
+            return eval(node->lhs) <= eval(node->rhs);
+        }
         return eval(node->lhs) <= eval(node->rhs);
     case ND_COND:
         return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
@@ -1513,12 +1567,9 @@ internal i64 eval2(Node *node, char **label)
         int64_t val = eval2(node->lhs, label);
         if (is_integer(node->ty)) {
             switch (node->ty->size) {
-            case 1:
-                return (u8)val;
-            case 2:
-                return (u16)val;
-            case 4:
-                return (u32)val;
+            case 1: return node->ty->is_unsigned ? (u8)val : (i8)val;
+            case 2: return node->ty->is_unsigned ? (u16)val : (i16)val;
+            case 4: return node->ty->is_unsigned ? (u32)val : (i32)val;
             }
         }
         return val;
@@ -1876,7 +1927,7 @@ internal Node *new_sub(Node *lhs, Node *rhs, Token *tok)
     // ptr - ptr, which returns how many elements are between the two.
     if (lhs->ty->base && rhs->ty->base) {
         Node *node = new_binary(ND_SUB, lhs, rhs, tok);
-        node->ty = ty_int;
+        node->ty = ty_long;
         node = new_binary(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
         return node;
     }
@@ -2382,25 +2433,25 @@ internal Node *primary(Token **rest, Token *tok)
     if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
         Type *ty = typename(&tok, tok->next->next);
         *rest = skip(tok, ")");
-        return new_num(ty->size, start);
+        return new_ulong(ty->size, start);
     }
 
     if (equal(tok, "sizeof")) {
         Node *node = unary(rest, tok->next);
         add_type(node);
-        return new_num(node->ty->size, tok);
+        return new_ulong(node->ty->size, tok);
     }
 
     if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
         Type *ty = typename(&tok, tok->next->next);
         *rest = skip(tok, ")");
-        return new_num(ty->align, tok);
+        return new_ulong(ty->align, tok);
     }
 
     if (equal(tok, "_Alignof")) {
         Node *node = unary(rest, tok->next);
         add_type(node);
-        return new_num(node->ty->align, tok);
+        return new_ulong(node->ty->align, tok);
     }
 
     if (tok->kind == TK_IDENT) {
@@ -2435,6 +2486,7 @@ internal Node *primary(Token **rest, Token *tok)
 
     if (tok->kind == TK_NUM) {
         Node *node = new_num(tok->val, tok);
+        node->ty = tok->ty;
         *rest = tok->next;
         return node;
     }

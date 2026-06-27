@@ -112,17 +112,19 @@ internal void load(Type *ty)
         return;
     }
 
+    char *insn = ty->is_unsigned ? "movzx" : "movsx";
+
     // When we load a char or a short value to a register, we always
     // extend them to the size of int, so we can assume the lower half of
     // a register always contains a valid value. The upper half of a
     // register for char, short and int may contain garbage. When we load
     // a long value to a register, it simply occupies the entire register.
     if (ty->size == 1) {
-        println("  movsx eax, byte ptr [rax]");
+        println("  %s eax, byte ptr [rax]", insn);
     } else if (ty->size == 2) {
-        println("  movsx eax, word ptr [rax]");
+        println("  %s eax, word ptr [rax]", insn);
     } else if (ty->size == 4) {
-        println("  movsxd rax, dword ptr [rax]");
+        println("  mov eax, dword ptr [rax]");
     } else {
         println("  mov rax, [rax]");
     }
@@ -161,33 +163,42 @@ internal void cmp_zero(Type *ty)
     }
 }
 
-enum { I8, I16, I32, I64 };
+enum { I8, I16, I32, I64, U8, U16, U32, U64 };
 
 internal int getTypeId(Type *ty)
 {
     switch (ty->kind) {
     case TY_CHAR:
-        return I8;
+        return ty->is_unsigned ? U8 : I8;
     case TY_SHORT:
-        return I16;
+        return ty->is_unsigned ? U16 : I16;
     case TY_INT:
-        return I32;
+        return ty->is_unsigned ? U32 : I32;
+    case TY_LONG:
+        return ty->is_unsigned ? U64 : I64;
     default:
         return I64;
     }
 }
 
 // The table for type casts
-internal char i32i8[] = "movsx eax, al";
+internal char i32i8[]  = "movsx eax, al";
+internal char i32u8[]  = "movzx eax, al";
 internal char i32i16[] = "movsx eax, ax";
+internal char i32u16[] = "movzx eax, ax";
 internal char i32i64[] = "movsxd rax, eax";
+internal char u32i64[] = "mov eax, eax";
 
 internal char *cast_table[][10] = {
-    // i8    i16     i32   i64
-    { NULL,  NULL,   NULL, i32i64 },   // i8
-    { i32i8, NULL,   NULL, i32i64 },   // i16
-    { i32i8, i32i16, NULL, i32i64 },   // i32
-    { i32i8, i32i16, NULL, NULL   },   // i64
+    // i8    i16     i32   i64     u8     u16     u32   u64
+    { NULL,  NULL,   NULL, i32i64, i32u8, i32u16, NULL, i32i64 }, // i8
+    { i32i8, NULL,   NULL, i32i64, i32u8, i32u16, NULL, i32i64 }, // i16
+    { i32i8, i32i16, NULL, i32i64, i32u8, i32u16, NULL, i32i64 }, // i32
+    { i32i8, i32i16, NULL, NULL,   i32u8, i32u16, NULL, NULL   }, // i64
+    { i32i8, NULL,   NULL, i32i64, NULL,  NULL,   NULL, i32i64 }, // u8
+    { i32i8, i32i16, NULL, i32i64, i32u8, NULL,   NULL, i32i64 }, // u16
+    { i32i8, i32i16, NULL, u32i64, i32u8, i32u16, NULL, u32i64 }, // u32
+    { i32i8, i32i16, NULL, NULL,   i32u8, i32u16, NULL, NULL   }, // u64
 };
 
 internal void cast(Type *from, Type *to)
@@ -348,11 +359,25 @@ void gen_expr(Node *node)
         // It looks like the most significant 48 or 56 bits in RAX may
         // contain garbage if a function return type is short or bool/char,
         // respectively. We clear the upper bits here.
-        TypeKind kind = node->ty->kind;
-        if (kind == TY_BOOL || kind == TY_CHAR || kind == TY_SHORT) {
-            println("  movsx eax, al");
+        switch (node->ty->kind) {
+        case TY_BOOL:
+            println("  movzx eax, al");
+            return;
+        case TY_CHAR:
+            if (node->ty->is_unsigned)
+                println("  movzx eax, al");
+            else
+                println("  movsx eax, al");
+            return;
+        case TY_SHORT:
+            if (node->ty->is_unsigned)
+                println("  movzx eax, ax");
+            else
+                println("  movsx eax, ax");
+            return;
+        default:
+            return;
         }
-        return;
     }
     default:
         break;
@@ -363,14 +388,16 @@ void gen_expr(Node *node)
     gen_expr(node->lhs);
     pop("r10");
 
-    char *rax, *r10;
+    char *rax, *r10, *rdx;
 
     if (node->lhs->ty->kind == TY_LONG || node->lhs->ty->base) {
         rax = "rax";
         r10 = "r10";
+        rdx = "rdx";
     } else {
         rax = "eax";
         r10 = "r10d";
+        rdx = "edx";
     }
 
     switch (node->kind) {
@@ -385,12 +412,17 @@ void gen_expr(Node *node)
         return;
     case ND_DIV:
     case ND_MOD:
-        if (node->lhs->ty->size == 8) {
-            println("  cqo");
+        if (node->ty->is_unsigned) {
+            println("  mov %s, 0", rdx);
+            println("  div %s", r10);
         } else {
-            println("  cdq");
+            if (node->lhs->ty->size == 8) {
+                println("  cqo");
+            } else {
+                println("  cdq");
+            }
+            println("  idiv  %s", r10);
         }
-        println("  idiv  %s", r10);
 
         if (node->kind == ND_MOD) {
             println("  mov rax, rdx");
@@ -416,9 +448,17 @@ void gen_expr(Node *node)
         } else if (node->kind == ND_NE) {
             println("  setne al");
         } else if (node->kind == ND_LT) {
-            println("  setl al");
+            if (node->lhs->ty->is_unsigned) {
+                println("  setb al");
+            } else {
+                println("  setl al");
+            }
         } else if (node->kind == ND_LE) {
-            println("  setle al");
+            if (node->lhs->ty->is_unsigned) {
+                println("  setbe al");
+            } else {
+                println("  setle al");
+            }
         }
 
         println("  movzx rax, al");
@@ -429,7 +469,11 @@ void gen_expr(Node *node)
         return;
     case ND_SHR:
         println("  mov rcx, r10");
-        println("  sar %s, cl", rax);
+        if (node->lhs->ty->is_unsigned) {
+            println("  shr %s, cl", rax);
+        } else {
+            println("  sar %s, cl", rax);
+        }
         return;
     default:
         error_tok(node->tok, "invalid expression");

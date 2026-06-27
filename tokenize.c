@@ -144,7 +144,7 @@ internal bool is_keyword(Token *tok)
         "void", "char", "short", "long", "int", "struct", "union", "_Bool",
         "return", "if", "else", "for", "while", "sizeof", "typedef", "enum",
         "static", "goto", "break", "continue", "switch", "case", "default",
-        "extern", "_Alignof", "_Alignas", "do"
+        "extern", "_Alignof", "_Alignas", "do", "signed", "unsigned"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
@@ -293,31 +293,78 @@ internal Token *read_char_literal(char *start)
 
     Token *tok = new_token(TK_NUM, start, end + 1);
     tok->val = c;
+    tok->ty = ty_int;
     return tok;
 }
 
-internal Token *read_int_literal(char *start) {
-  char *p = start;
+internal Token *read_int_literal(char *start)
+{
+    char *p = start;
 
-  int base = 10;
-  if (!_strnicmp(p, "0x", 2) && isalnum(p[2])) {
-    p += 2;
-    base = 16;
-  } else if (!_strnicmp(p, "0b", 2) && isalnum(p[2])) {
-    p += 2;
-    base = 2;
-  } else if (*p == '0') {
-    base = 8;
-  }
+    // Read a binary, octal, decimal or hexadecimal number.
+    int base = 10;
+    if (!_strnicmp(p, "0x", 2) && isxdigit(p[2])) {
+        p += 2;
+        base = 16;
+    } else if (!_strnicmp(p, "0b", 2) && (p[2] == '0' || p[2] == '1')) {
+        p += 2;
+        base = 2;
+    } else if (*p == '0') {
+        base = 8;
+    }
 
-  i64 val = strtoull(p, &p, base);
-  if (isalnum(*p)) {
-      error_at(p, "invalid digit");
-  }
+    u64 val = strtoull(p, &p, base);
 
-  Token *tok = new_token(TK_NUM, start, p);
-  tok->val = val;
-  return tok;
+    // Read U, L or LL suffixes.
+    bool l = false;
+    bool u = false;
+
+    if (startswith(p, "LLU") || startswith(p, "LLu") ||
+        startswith(p, "llU") || startswith(p, "llu") ||
+        startswith(p, "ULL") || startswith(p, "Ull") ||
+        startswith(p, "uLL") || startswith(p, "ull"))
+    {
+        p += 3;
+        l = u = true;
+    } else if (!_strnicmp(p, "lu", 2) || !_strnicmp(p, "ul", 2)) {
+        p += 2;
+        l = u = true;
+    } else if (startswith(p, "LL") || startswith(p, "ll")) {
+        p += 2;
+        l = true;
+    } else if (*p == 'L' || *p == 'l') {
+        p++;
+        l = true;
+    } else if (*p == 'U' || *p == 'u') {
+        p++;
+        u = true;
+    }
+
+    if (isalnum(*p)) {
+        error_at(p, "invalid digit");
+    }
+
+    // Infer a type.
+    Type *ty;
+    if (base == 10) {
+        if (l && u)         { ty = ty_ulong;                         }
+        else if (l)         { ty = ty_long;                          }
+        else if (u)         { ty = (val >> 32) ? ty_ulong : ty_uint; }
+        else                { ty = (val >> 31) ? ty_long : ty_int;   }
+    } else {
+        if (l && u)         { ty = ty_ulong;                         }
+        else if (l)         { ty = (val >> 63) ? ty_ulong : ty_long; }
+        else if (u)         { ty = (val >> 32) ? ty_ulong : ty_uint; }
+        else if (val >> 63) { ty = ty_ulong;                         }
+        else if (val >> 32) { ty = ty_long;                          }
+        else if (val >> 31) { ty = ty_uint;                          }
+        else                { ty = ty_int;                           }
+    }
+
+    Token *tok = new_token(TK_NUM, start, p);
+    tok->val = val;
+    tok->ty = ty;
+    return tok;
 }
 
 // Initialize line info for all tokens.
