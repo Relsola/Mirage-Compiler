@@ -41,6 +41,27 @@ internal void pop(char *arg)
     --depth;
 }
 
+internal int push_args(Node *arg)
+{
+    if (!arg) {
+        return 0;
+    }
+
+    int nargs = push_args(arg->next);
+    gen_expr(arg);
+    push();
+    return nargs + 1;
+}
+
+internal int count_args(Node *arg)
+{
+    int n = 0;
+    for (; arg; arg = arg->next) {
+        n++;
+    }
+    return n;
+}
+
 // Round up `n` to the nearest multiple of `align`. For instance,
 // align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
 int align_to(int n, int align)
@@ -291,14 +312,21 @@ void gen_expr(Node *node)
           return;
       }
     case ND_FUNCALL: {
-        int nargs = 0;
-        for (Node *arg = node->args; arg; arg = arg->next) {
-            gen_expr(arg);
-            push();
-            nargs++;
+        int nargs = count_args(node->args);
+        int regargs = nargs < 4 ? nargs : 4;
+        int stack_args = nargs - regargs;
+
+        // For Win64, stack arguments must be located right above the 32-byte
+        // shadow space. Insert optional 8-byte padding *below* stack args.
+        bool needs_pad = ((depth + stack_args) % 2) != 0;
+        if (needs_pad) {
+            println("  sub rsp, 8");
+            depth++;
         }
 
-        for (int i = nargs - 1; i >= 0; --i) {
+        push_args(node->args);
+
+        for (int i = 0; i < regargs; i++) {
             pop(argreg64[i]);
         }
 
@@ -306,6 +334,24 @@ void gen_expr(Node *node)
         println("  mov rax, 0");
         println("  call %s", node->funcname);
         println("  add rsp, 32");
+
+        if (stack_args) {
+            println("  add rsp, %d", stack_args * 8);
+            depth -= stack_args;
+        }
+
+        if (needs_pad) {
+            println("  add rsp, 8");
+            depth--;
+        }
+
+        // It looks like the most significant 48 or 56 bits in RAX may
+        // contain garbage if a function return type is short or bool/char,
+        // respectively. We clear the upper bits here.
+        TypeKind kind = node->ty->kind;
+        if (kind == TY_BOOL || kind == TY_CHAR || kind == TY_SHORT) {
+            println("  movsx eax, al");
+        }
         return;
     }
     default:
@@ -427,6 +473,17 @@ internal void gen_stmt(Node *node)
         println("%s:", node->brk_label);
         return;
     }
+    case ND_DO: {
+        int c = count();
+        println(".L.begin.%d:", c);
+        gen_stmt(node->then);
+        println("%s:", node->cont_label);
+        gen_expr(node->cond);
+        println("  cmp rax, 0");
+        println("  jne .L.begin.%d", c);
+        println("%s:", node->brk_label);
+        return;
+    }
     case ND_SWITCH:
         gen_expr(node->cond);
 
@@ -461,7 +518,9 @@ internal void gen_stmt(Node *node)
         gen_stmt(node->lhs);
         return;
     case ND_RETURN:
-        gen_expr(node->lhs);
+        if (node->lhs) {
+            gen_expr(node->lhs);
+        }
         println("  jmp .L.return.%s", current_fn->name);
         return;
     case ND_EXPR_STMT:
@@ -497,7 +556,9 @@ internal void emit_data(Obj *prog)
             continue;
         }
 
-        println("  .globl %s", var->name);
+        if (var->is_static) {
+            println("  .globl %s", var->name);
+        }
         println("  .align %d", var->align);
 
         if (var->init_data) {
@@ -566,6 +627,15 @@ internal void emit_text(Obj *prog)
         int i = 0;
         for (Obj *var = fn->params; var; var = var->next) {
             store_gp(i++, var->offset, var->ty->size);
+        }
+
+        if (fn->va_area) {
+            for (int r = 0; r < 4; r++) {
+                // call and rbp use 16 byte
+                println("  mov [rbp + %d], %s", 16 + (r * 8), argreg64[r]);
+            }
+            println("  lea rax, [rbp + %d]", fn->va_start_offset);
+            println("  mov [rbp + %d], rax", fn->va_area->offset);
         }
 
         // Emit code

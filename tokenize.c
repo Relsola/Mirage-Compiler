@@ -126,7 +126,7 @@ internal bool is_ident2(char c)
 internal int read_punct(char *p)
 {
     local_persist char *kw[] = {
-        "<<=", ">>=", "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=",
+        "<<=", ">>=", "...", "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=",
         "++", "--", "%=", "&=", "|=", "^=", "&&", "||", "<<", ">>"
     };
 
@@ -144,7 +144,7 @@ internal bool is_keyword(Token *tok)
         "void", "char", "short", "long", "int", "struct", "union", "_Bool",
         "return", "if", "else", "for", "while", "sizeof", "typedef", "enum",
         "static", "goto", "break", "continue", "switch", "case", "default",
-        "extern", "_Alignof", "_Alignas",
+        "extern", "_Alignof", "_Alignas", "do"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {

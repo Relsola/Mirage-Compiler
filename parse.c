@@ -151,6 +151,9 @@ internal Type *union_decl(Token **rest, Token *tok);
 internal Node *postfix(Token **rest, Token *tok);
 internal Node *unary(Token **rest, Token *tok);
 internal Node *primary(Token **rest, Token *tok);
+internal Node *builtin_va_start(Token **rest, Token *tok);
+internal Node *builtin_va_arg(Token **rest, Token *tok);
+internal Node *builtin_va_end(Token **rest, Token *tok);
 internal Token *parse_typedef(Token *tok, Type *basety);
 internal bool is_function(Token *tok);
 internal Token *function(Token *tok, Type *basety, VarAttr *attr);
@@ -328,6 +331,7 @@ internal Obj *new_gvar(char *name, Type *ty)
 {
     Obj *var = new_var(name, ty);
     var->next = globals;
+    var->is_static = true;
     var->is_definition = true;
     globals = var;
     return var;
@@ -519,7 +523,7 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
     return ty;
 }
 
-// func-params = ("void" | param ("," param)*)? ")"
+// func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
 internal Type *func_params(Token **rest, Token *tok, Type *ty)
 {
@@ -530,10 +534,18 @@ internal Type *func_params(Token **rest, Token *tok, Type *ty)
 
     Type head = {};
     Type *cur = &head;
+    bool is_variadic = false;
 
     while (!equal(tok, ")")) {
         if (cur != &head) {
             tok = skip(tok, ",");
+        }
+
+        if (equal(tok, "...")) {
+            is_variadic = true;
+            tok = tok->next;
+            skip(tok, ")");
+            break;
         }
 
         Type *ty2 = declspec(&tok, tok, NULL);
@@ -550,8 +562,13 @@ internal Type *func_params(Token **rest, Token *tok, Type *ty)
         cur = cur->next = copy_type(ty2);
     }
 
+    if (cur == &head) {
+        is_variadic = true;
+    }
+
     ty = func_type(ty);
     ty->params = head.next;
+    ty->is_variadic = is_variadic;
     *rest = tok->next;
     return ty;
 }
@@ -730,6 +747,16 @@ internal Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr
 
         if (ty->kind == TY_VOID) {
             error_tok(tok, "variable declared void");
+        }
+
+        if (attr && attr->is_static) {
+            // static local variable
+            Obj *var = new_anon_gvar(ty);
+            push_scope(get_ident(ty->name))->var = var;
+            if (equal(tok, "=")) {
+                gvar_initializer(&tok, tok->next, var);
+            }
+            continue;
         }
 
         Obj *var = new_lvar(get_ident(ty->name), ty);
@@ -1188,13 +1215,14 @@ internal Node *compound_stmt(Token **rest, Token *tok)
     return node;
 }
 
-// stmt = "return" expr ";"
+// stmt = "return" expr? ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "case" const-expr ":" stmt
 //      | "case" num ":" stmt
 //      | "default" ":" stmt
 //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
+//      | "do" stmt "while" "(" expr ")" ";"
 //      | "goto" ident ";"
 //      | "break" ";"
 //      | "continue" ";"
@@ -1205,6 +1233,10 @@ internal Node *stmt(Token **rest, Token *tok)
 {
     if (equal(tok, "return")) {
         Node *node = new_node(ND_RETURN, tok);
+        if (consume(rest, tok->next, ";")) {
+            return node;
+        }
+
         Node *exp = expr(&tok, tok->next);
         *rest = skip(tok, ";");
 
@@ -1325,6 +1357,27 @@ internal Node *stmt(Token **rest, Token *tok)
 
         brk_label = brk;
         cont_label = cont;
+        return node;
+    }
+
+    if (equal(tok, "do")) {
+        Node *node = new_node(ND_DO, tok);
+
+        char *brk = brk_label;
+        char *cont = cont_label;
+        brk_label = node->brk_label = new_unique_name();
+        cont_label = node->cont_label = new_unique_name();
+
+        node->then = stmt(&tok, tok->next);
+
+        brk_label = brk;
+        cont_label = cont;
+
+        tok = skip(tok, "while");
+        tok = skip(tok, "(");
+        node->cond = expr(&tok, tok);
+        tok = skip(tok, ")");
+        *rest = skip(tok, ";");
         return node;
     }
 
@@ -1889,6 +1942,13 @@ internal Node *cast(Token **rest, Token *tok)
         Token *start = tok;
         Type *ty = typename(&tok, tok->next);
         tok = skip(tok, ")");
+
+        // compound literal
+        if (equal(tok, "{")) {
+            return unary(rest, start);
+        }
+
+        // type cast
         Node *node = new_cast(cast(rest, tok), ty);
         node->tok = start;
         return node;
@@ -2112,9 +2172,28 @@ internal Node *new_inc_dec(Node *node, Token *tok, int addend)
                     node->ty);
 }
 
-// postfix = primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
+// postfix = "(" type-name ")" "{" initializer-list "}"
+//         | primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
 internal Node *postfix(Token **rest, Token *tok)
 {
+    if (equal(tok, "(") && is_typename(tok->next)) {
+        // Compound literal
+        Token *start = tok;
+        Type *ty = typename(&tok, tok->next);
+        tok = skip(tok, ")");
+
+        if (scope->next == NULL) {
+            Obj *var = new_anon_gvar(ty);
+            gvar_initializer(rest, tok, var);
+            return new_var_node(var, start);
+        }
+
+        Obj *var = new_lvar("", ty);
+        Node *lhs = lvar_initializer(rest, tok, var);
+        Node *rhs = new_var_node(var, tok);
+        return new_binary(ND_COMMA, lhs, rhs, start);
+    }
+
     Node *node = primary(&tok, tok);
 
     for (;;) {
@@ -2185,6 +2264,10 @@ internal Node *funcall(Token **rest, Token *tok)
         Node *arg = assign(&tok, tok);
         add_type(arg);
 
+        if (!param_ty && !ty->is_variadic) {
+            error_tok(tok, "too many arguments");
+        }
+
         if (param_ty) {
             if (param_ty->kind == TY_STRUCT || param_ty->kind == TY_UNION) {
                 error_tok(arg->tok, "passing struct or union is not supported yet");
@@ -2196,6 +2279,9 @@ internal Node *funcall(Token **rest, Token *tok)
         cur = cur->next = arg;
     }
 
+    if (param_ty) {
+        error_tok(tok, "too few arguments");
+    }
     *rest = skip(tok, ")");
 
     Node *node = new_node(ND_FUNCALL, start);
@@ -2204,6 +2290,55 @@ internal Node *funcall(Token **rest, Token *tok)
     node->ty = ty->return_ty;
     node->args = head.next;
     return node;
+}
+
+internal Node *builtin_va_start(Token **rest, Token *tok)
+{
+    Token *start = tok;
+    tok = skip(tok->next, "(");
+
+    Node *ap = assign(&tok, tok);
+    tok = skip(tok, ",");
+    assign(&tok, tok);
+    *rest = skip(tok, ")");
+
+    if (ap->kind != ND_VAR) {
+        error_tok(ap->tok, "va_start's first argument must be a variable");
+    }
+    if (!current_fn || !current_fn->va_area) {
+        error_tok(start, "va_start is available only in variadic functions");
+    }
+
+    Node *area = new_var_node(current_fn->va_area, start);
+    return new_binary(ND_ASSIGN, ap, area, start);
+}
+
+internal Node *builtin_va_arg(Token **rest, Token *tok)
+{
+    Token *start = tok;
+    tok = skip(tok->next, "(");
+
+    Node *ap = assign(&tok, tok);
+    tok = skip(tok, ",");
+    Type *ty = typename(&tok, tok);
+    *rest = skip(tok, ")");
+
+    if (ap->kind != ND_VAR) {
+        error_tok(ap->tok, "va_arg's first argument must be a variable");
+    }
+
+    Node *step = new_binary(ND_ASSIGN, ap, new_add(ap, new_num(8, start), start), start);
+    Node *addr = new_sub(ap, new_num(8, start), start);
+    Node *load = new_unary(ND_DEREF, new_cast(addr, pointer_to(ty)), start);
+    return new_binary(ND_COMMA, step, load, start);
+}
+
+internal Node *builtin_va_end(Token **rest, Token *tok)
+{
+    tok = skip(tok->next, "(");
+    assign(&tok, tok);
+    *rest = skip(tok, ")");
+    return new_node(ND_NULL_EXPR, tok);
 }
 
 // primary = "(" "{" stmt+ "}" ")"
@@ -2217,6 +2352,18 @@ internal Node *funcall(Token **rest, Token *tok)
 internal Node *primary(Token **rest, Token *tok)
 {
     Token *start = tok;
+
+    if (equal(tok, "va_start") && equal(tok->next, "(")) {
+        return builtin_va_start(rest, tok);
+    }
+
+    if (equal(tok, "va_arg") && equal(tok->next, "(")) {
+        return builtin_va_arg(rest, tok);
+    }
+
+    if (equal(tok, "va_end") && equal(tok->next, "(")) {
+        return builtin_va_end(rest, tok);
+    }
 
     if (equal(tok, "(") && equal(tok->next, "{")) {
         // This is a GNU statement expression.
@@ -2362,6 +2509,15 @@ internal Token *function(Token *tok, Type *basety, VarAttr *attr)
     create_param_lvars(ty->params);
     fn->params = locals;
 
+    if (ty->is_variadic) {
+        int nparams = 0;
+        for (Type *param = ty->params; param; param = param->next) {
+            nparams++;
+        }
+        fn->va_start_offset = 16 + nparams * 8;
+        fn->va_area = new_lvar("", pointer_to(ty_char));
+    }
+
     tok = skip(tok, "{");
     fn->body = compound_stmt(&tok, tok);
     fn->locals = locals;
@@ -2383,6 +2539,7 @@ internal Token *global_var(Token *tok, Type *basety, VarAttr *attr)
         Type *ty = declarator(&tok, tok, basety);
         Obj *var = new_gvar(get_ident(ty->name), ty);
         var->is_definition = !attr->is_extern;
+        var->is_static = attr->is_static;
         if (attr->align) {
             var->align = attr->align;
         }
@@ -2412,6 +2569,7 @@ internal bool is_function(Token *tok)
 Obj *parse(Token *tok)
 {
     globals = NULL;
+    push_scope("va_list")->type_def = pointer_to(ty_char);
 
     while (tok->kind != TK_EOF) {
         VarAttr attr = {};

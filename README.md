@@ -14,7 +14,11 @@
 int a = ({ int b = 3; b; });
 ```
 
-2. [GNU] 允许`_Alignof`接受变量为操作数  
+2. 允许`_Alignof`接受变量为操作数  
+
+```c
+char x; _Alignof(x); // 1
+```
 
 ## References
 

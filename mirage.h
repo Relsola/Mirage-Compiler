@@ -1,7 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
@@ -105,6 +104,8 @@ struct Obj
 
     // Function
     Obj *params;
+    Obj *va_area;
+    int va_start_offset;
     Node *body;
     Obj *locals;
     int stack_size;
@@ -153,6 +154,7 @@ typedef enum
     ND_RETURN,    // "return"
     ND_IF,        // "if"
     ND_FOR,       // "for" or "while"
+    ND_DO,        // "do"
     ND_SWITCH,    // "switch"
     ND_CASE,      // "case"
     ND_BLOCK,     // { ... }
@@ -270,6 +272,7 @@ struct Type
     // Function type
     Type *return_ty;
     Type *params;
+    bool is_variadic;
     Type *next;
 };
 
