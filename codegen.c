@@ -665,7 +665,13 @@ internal void emit_text(Obj *prog)
         // Prologue
         println("  push rbp");
         println("  mov rbp, rsp");
-        println("  sub rsp, %d", fn->stack_size);
+        if (fn->stack_size >= 4096) {
+            println("  mov eax, %d", fn->stack_size);
+            println("  call __chkstk");
+            println("  sub rsp, rax");
+        } else {
+            println("  sub rsp, %d", fn->stack_size);
+        }
 
         // Save passed-by-register arguments to the stack
         int i = 0;

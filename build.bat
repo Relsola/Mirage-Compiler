@@ -16,13 +16,13 @@ for %%f in (test\*.c) do (
     set "_e=test\%%~nf.exe"
 
     clang -o- -E -P -C %%f | mirage.exe -o !_s! -
-    if errorlevel 1 exit /b !errorlevel!
+    if !errorlevel! neq 0 exit /b !errorlevel!
 
     clang -o !_e! !_s! -xc test/common
-    if errorlevel 1 exit /b !errorlevel!
+    if !errorlevel! neq 0 exit /b !errorlevel!
 
     !_e!
-    if errorlevel 1 exit /b !errorlevel!
+    if !errorlevel! neq 0 exit /b !errorlevel!
 )
 exit /b 0
 
