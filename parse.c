@@ -162,6 +162,7 @@ internal i64 const_expr(Token **rest, Token *tok);
 internal i64 eval(Node *node);
 internal i64 eval2(Node *node, char **label);
 internal i64 eval_rval(Node *node, char **label);
+internal f64 eval_double(Node *node);
 
 internal void enter_scope(void)
 {
@@ -395,7 +396,9 @@ internal void push_tag_scope(Token *tok, Type *ty)
 //             | "typedef" | "static" | "extern"
 //             | "signed" | "unsigned"
 //             | struct-decl | union-decl | typedef-name
-//             | enum-specifier)+
+//             | enum-specifier
+//             | "const" | "volatile" | "auto" | "register" | "restrict"
+//             | "__restrict" | "__restrict__" | "_Noreturn")+
 //
 // The order of typenames in a type-specifier doesn't matter. For
 // example, `int long static` means the same as `static long int`.
@@ -422,9 +425,11 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
         SHORT    = 1 << 6,
         INT      = 1 << 8,
         LONG     = 1 << 10,
-        OTHER    = 1 << 12,
-        SIGNED   = 1 << 13,
-        UNSIGNED = 1 << 14,
+        FLOAT    = 1 << 12,
+        DOUBLE   = 1 << 14,
+        OTHER    = 1 << 16,
+        SIGNED   = 1 << 17,
+        UNSIGNED = 1 << 18,
     };
 
     Type *ty = ty_int;
@@ -450,6 +455,15 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
             }
 
             tok = tok->next;
+            continue;
+        }
+
+        // These keywords are recognized but ignored.
+        if (consume(&tok, tok, "const")        || consume(&tok, tok, "volatile")   ||
+            consume(&tok, tok, "auto")         || consume(&tok, tok, "register")   ||
+            consume(&tok, tok, "restrict")     || consume(&tok, tok, "__restrict") ||
+            consume(&tok, tok, "__restrict__") || consume(&tok, tok, "_Noreturn"))
+        {
             continue;
         }
 
@@ -498,6 +512,8 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
         else if (equal(tok, "short"))    { counter += SHORT;    }
         else if (equal(tok, "int"))      { counter += INT;      }
         else if (equal(tok, "long"))     { counter += LONG;     }
+        else if (equal(tok, "float"))    { counter += FLOAT;    }
+        else if (equal(tok, "double"))   { counter += DOUBLE;   }
         else if (equal(tok, "signed"))   { counter |= SIGNED;   }
         else if (equal(tok, "unsigned")) { counter |= UNSIGNED; }
         else                             { m__unreachable();    }
@@ -550,6 +566,13 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
         case UNSIGNED + LONG + LONG:
         case UNSIGNED + LONG + LONG + INT:
             ty = ty_ulong;
+            break;
+        case FLOAT:
+            ty = ty_float;
+            break;
+        case DOUBLE:
+        case LONG + DOUBLE:
+            ty = ty_double;
             break;
         default:
             error_tok(tok, "invalid type");
@@ -612,9 +635,13 @@ internal Type *func_params(Token **rest, Token *tok, Type *ty)
     return ty;
 }
 
-// array-dimensions = const-expr? "]" type-suffix
+// array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
 internal Type *array_dimensions(Token **rest, Token *tok, Type *ty)
 {
+    while (equal(tok, "static") || equal(tok, "restrict")) {
+        tok = tok->next;
+    }
+
     if (equal(tok, "]")) {
         ty = type_suffix(rest, tok->next, ty);
         return array_of(ty, -1);
@@ -645,12 +672,24 @@ internal Type *type_suffix(Token **rest, Token *tok, Type *ty)
     return ty;
 }
 
-// declarator = "*"* ("(" ident ")" | "(" declarator ")" | ident) type-suffix
-internal Type *declarator(Token **rest, Token *tok, Type *ty)
+// pointers = ("*" ("const" | "volatile" | "restrict")*)*
+internal Type *pointers(Token **rest, Token *tok, Type *ty)
 {
     while (consume(&tok, tok, "*")) {
         ty = pointer_to(ty);
+        while (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
+               equal(tok, "__restrict") || equal(tok, "__restrict__")) {
+            tok = tok->next;
+        }
     }
+    *rest = tok;
+    return ty;
+}
+
+// declarator = pointers ("(" ident ")" | "(" declarator ")" | ident) type-suffix
+internal Type *declarator(Token **rest, Token *tok, Type *ty)
+{
+    ty = pointers(&tok, tok, ty);
 
     if (equal(tok, "(")) {
         Token *start = tok;
@@ -661,21 +700,24 @@ internal Type *declarator(Token **rest, Token *tok, Type *ty)
         return declarator(&tok, start->next, ty);
     }
 
-    if (tok->kind != TK_IDENT) {
-        error_tok(tok, "expected a variable name");
+    Token *name = NULL;
+    Token *name_pos = tok;
+
+    if (tok->kind == TK_IDENT) {
+        name = tok;
+        tok = tok->next;
     }
 
-    ty = type_suffix(rest, tok->next, ty);
-    ty->name = tok;
+    ty = type_suffix(rest, tok, ty);
+    ty->name = name;
+    ty->name_pos = name_pos;
     return ty;
 }
 
-// abstract-declarator = "*"* ("(" abstract-declarator ")")? type-suffix
+// abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
 internal Type *abstract_declarator(Token **rest, Token *tok, Type *ty)
 {
-    while (consume(&tok, tok, "*")) {
-        ty = pointer_to(ty);
-    }
+    ty = pointers(&tok, tok, ty);
 
     if (equal(tok, "(")) {
         Token *start = tok;
@@ -786,6 +828,10 @@ internal Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr
 
         if (ty->kind == TY_VOID) {
             error_tok(tok, "variable declared void");
+        }
+
+        if (!ty->name) {
+            error_tok(ty->name_pos, "variable name omitted");
         }
 
         if (attr && attr->is_static) {
@@ -1162,6 +1208,16 @@ internal Relocation *write_gvar_data(Relocation *cur, Initializer *init, Type *t
         return cur;
     }
 
+    if (ty->kind == TY_FLOAT) {
+        *(f32 *)(buf + offset) = eval_double(init->expr);
+        return cur;
+    }
+
+    if (ty->kind == TY_DOUBLE) {
+        *(f64 *)(buf + offset) = eval_double(init->expr);
+        return cur;
+    }
+
     char *label = NULL;
     u64 val = eval2(init->expr, &label);
 
@@ -1197,9 +1253,10 @@ internal void gvar_initializer(Token **rest, Token *tok, Obj *var)
 internal bool is_typename(Token *tok)
 {
     local_persist char *kw[] = {
-        "void", "_Bool", "bool", "char", "short", "int", "long",
-        "struct", "union", "typedef", "enum", "static", "extern",
-        "_Alignas", "signed", "unsigned"
+        "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+        "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
+        "const", "volatile", "auto", "register", "restrict", "__restrict",
+        "__restrict__", "_Noreturn", "float", "double"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); ++i) {
@@ -1505,6 +1562,10 @@ internal i64 eval2(Node *node, char **label)
 {
     add_type(node);
 
+    if (is_flonum(node->ty)) {
+        return eval_double(node);
+    }
+
     switch (node->kind) {
     case ND_ADD:
         return eval2(node->lhs, label) + eval(node->rhs);
@@ -1615,6 +1676,44 @@ internal i64 eval_rval(Node *node, char **label)
         return eval_rval(node->lhs, label) + node->member->offset;
     default:
         error_tok(node->tok, "invalid initializer");
+    }
+}
+
+internal double eval_double(Node *node)
+{
+    add_type(node);
+
+    if (is_integer(node->ty)) {
+        if (node->ty->is_unsigned) {
+            return (unsigned long)eval(node);
+        }
+        return eval(node);
+    }
+
+    switch (node->kind) {
+    case ND_ADD:
+        return eval_double(node->lhs) + eval_double(node->rhs);
+    case ND_SUB:
+        return eval_double(node->lhs) - eval_double(node->rhs);
+    case ND_MUL:
+        return eval_double(node->lhs) * eval_double(node->rhs);
+    case ND_DIV:
+        return eval_double(node->lhs) / eval_double(node->rhs);
+    case ND_NEG:
+        return -eval_double(node->lhs);
+    case ND_COND:
+        return eval_double(node->cond) ? eval_double(node->then) : eval_double(node->els);
+    case ND_COMMA:
+        return eval_double(node->rhs);
+    case ND_CAST:
+        if (is_flonum(node->lhs->ty)) {
+            return eval_double(node->lhs);
+        }
+        return eval(node->lhs);
+    case ND_NUM:
+        return node->fval;
+    default:
+        error_tok(node->tok, "not a compile-time constant");
     }
 }
 
@@ -1882,7 +1981,7 @@ internal Node *new_add(Node *lhs, Node *rhs, Token *tok)
     add_type(rhs);
 
     // num + num
-    if (is_integer(lhs->ty) && is_integer(rhs->ty)) {
+    if (is_numeric(lhs->ty) && is_numeric(rhs->ty)) {
         Node *node = new_binary(ND_ADD, lhs, rhs, tok);
         return node;
     }
@@ -1911,7 +2010,7 @@ internal Node *new_sub(Node *lhs, Node *rhs, Token *tok)
     add_type(rhs);
 
     // num - num
-    if (is_integer(lhs->ty) && is_integer(rhs->ty)) {
+    if (is_numeric(lhs->ty) && is_numeric(rhs->ty)) {
         return new_binary(ND_SUB, lhs, rhs, tok);
     }
 
@@ -2325,6 +2424,10 @@ internal Node *funcall(Token **rest, Token *tok)
             }
             arg = new_cast(arg, param_ty);
             param_ty = param_ty->next;
+        } else if (arg->ty->kind == TY_FLOAT) {
+            // If parameter type is omitted (e.g. in "..."), float
+            // arguments are promoted to double.
+            arg = new_cast(arg, ty_double);
         }
 
         cur = cur->next = arg;
@@ -2485,7 +2588,14 @@ internal Node *primary(Token **rest, Token *tok)
     }
 
     if (tok->kind == TK_NUM) {
-        Node *node = new_num(tok->val, tok);
+        Node *node;
+        if (is_flonum(tok->ty)) {
+            node = new_node(ND_NUM, tok);
+            node->fval = tok->fval;
+        } else {
+            node = new_num(tok->val, tok);
+        }
+
         node->ty = tok->ty;
         *rest = tok->next;
         return node;

@@ -41,6 +41,39 @@ int main() {
   ASSERT(-1, ({ typedef short T; T x = 65535; (int)x; }));
   ASSERT(65535, ({ typedef unsigned short T; T x = 65535; (int)x; }));
 
+  ASSERT(0, (_Bool)0.0);
+  ASSERT(1, (_Bool)0.1);
+  ASSERT(3, (char)3.0);
+  ASSERT(1000, (short)1000.3);
+  ASSERT(3, (int)3.99);
+  ASSERT(2000000000000000, (long)2e15);
+  ASSERT(3, (float)3.5);
+  ASSERT(5, (double)(float)5.5);
+  ASSERT(3, (float)3);
+  ASSERT(3, (double)3);
+  ASSERT(3, (float)3L);
+  ASSERT(3, (double)3L);
+
+  ASSERT(1, 2e3==2e3);
+  ASSERT(0, 2e3==2e5);
+  ASSERT(1, 2.0==2);
+  ASSERT(0, 5.1<5);
+  ASSERT(0, 5.0<5);
+  ASSERT(1, 4.9<5);
+  ASSERT(0, 5.1<=5);
+  ASSERT(1, 5.0<=5);
+  ASSERT(1, 4.9<=5);
+
+  ASSERT(1, 2e3f==2e3);
+  ASSERT(0, 2e3f==2e5);
+  ASSERT(1, 2.0f==2);
+  ASSERT(0, 5.1f<5);
+  ASSERT(0, 5.0f<5);
+  ASSERT(1, 4.9f<5);
+  ASSERT(0, 5.1f<=5);
+  ASSERT(1, 5.0f<=5);
+  ASSERT(1, 4.9f<=5);
+
   printf("OK\n");
   return 0;
 }

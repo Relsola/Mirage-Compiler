@@ -13,6 +13,9 @@ Type *ty_ushort = &(Type){ TY_SHORT, 2, 2, true };
 Type *ty_uint = &(Type){ TY_INT, 4, 4, true };
 Type *ty_ulong = &(Type){ TY_LONG, 8, 8, true };
 
+Type *ty_float = &(Type){ TY_FLOAT, 4, 4 };
+Type *ty_double = &(Type){ TY_DOUBLE, 8, 8 };
+
 internal Type *new_type(TypeKind kind, int size, int align)
 {
     Type *ty = calloc(1, sizeof(Type));
@@ -27,6 +30,16 @@ bool is_integer(Type *ty)
     TypeKind kind = ty->kind;
     return kind == TY_BOOL || kind == TY_CHAR || kind == TY_SHORT ||
            kind == TY_INT  || kind == TY_LONG || kind == TY_ENUM;
+}
+
+bool is_flonum(Type *ty)
+{
+    return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
+}
+
+bool is_numeric(Type *ty)
+{
+    return is_integer(ty) || is_flonum(ty);
 }
 
 Type *copy_type(Type *ty)
@@ -74,6 +87,13 @@ internal Type *get_common_type(Type *ty1, Type *ty2)
 {
     if (ty1->base) {
         return pointer_to(ty1->base);
+    }
+
+    if (ty1->kind == TY_DOUBLE || ty2->kind == TY_DOUBLE) {
+        return ty_double;
+    }
+    if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT) {
+        return ty_float;
     }
 
     if (ty1->size < 4) {

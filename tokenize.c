@@ -144,7 +144,9 @@ internal bool is_keyword(Token *tok)
         "void", "char", "short", "long", "int", "struct", "union", "_Bool",
         "return", "if", "else", "for", "while", "sizeof", "typedef", "enum",
         "static", "goto", "break", "continue", "switch", "case", "default",
-        "extern", "_Alignof", "_Alignas", "do", "signed", "unsigned"
+        "extern", "_Alignof", "_Alignas", "do", "signed", "unsigned", "const",
+        "volatile", "auto", "register", "restrict", "__restrict", "__restrict__",
+        "_Noreturn", "float", "double"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
@@ -340,10 +342,6 @@ internal Token *read_int_literal(char *start)
         u = true;
     }
 
-    if (isalnum(*p)) {
-        error_at(p, "invalid digit");
-    }
-
     // Infer a type.
     Type *ty;
     if (base == 10) {
@@ -363,6 +361,35 @@ internal Token *read_int_literal(char *start)
 
     Token *tok = new_token(TK_NUM, start, p);
     tok->val = val;
+    tok->ty = ty;
+    return tok;
+}
+
+internal Token *read_number(char *start)
+{
+    // Try to parse as an integer constant.
+    Token *tok = read_int_literal(start);
+    if (!strchr(".eEfF", start[tok->len])) {
+        return tok;
+    }
+
+    // If it's not an integer, it must be a floating point constant.
+    char *end;
+    f64 val = strtod(start, &end);
+
+    Type *ty;
+    if (*end == 'f' || *end == 'F') {
+        ty = ty_float;
+        end++;
+    } else if (*end == 'l' || *end == 'L') {
+        ty = ty_double;
+        end++;
+    } else {
+        ty = ty_double;
+    }
+
+    tok = new_token(TK_NUM, start, end);
+    tok->fval = val;
     tok->ty = ty;
     return tok;
 }
@@ -419,8 +446,8 @@ internal Token *tokenize(char *filename, char *p)
         }
 
         // Numeric literal
-        if (isdigit(*p)) {
-            cur = cur->next = read_int_literal(p);
+        if (isdigit(*p) || (*p == '.' && isdigit(p[1]))) {
+            cur = cur->next = read_number(p);
             p += cur->len;
             continue;
         }

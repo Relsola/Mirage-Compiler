@@ -18,15 +18,18 @@
 #define MAX(x, y) ((x) < (y) ? (y) : (x))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
-typedef int8_t i8;
-typedef int16_t i16;
-typedef int32_t i32;
-typedef int64_t i64;
+typedef int8_t   i8;
+typedef int16_t  i16;
+typedef int32_t  i32;
+typedef int64_t  i64;
 
-typedef uint8_t u8;
+typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
+
+typedef double   f64;
+typedef float    f32;
 
 typedef struct Type Type;
 typedef struct Node Node;
@@ -57,6 +60,7 @@ struct Token
     TokenKind kind; // Token kind
     Token *next;    // Next token
     i64 val;        // If kind is TK_NUM, its value
+    f64 fval;       // If kind is TK_NUM, its value
     char *loc;      // Token location
     int len;        // Token length
     Type *ty;       // Used if TK_NUM or TK_STR
@@ -87,6 +91,7 @@ struct Obj
     Obj *next;
     char *name;    // Variable name
     Type *ty;      // Type
+    Token *tok;    // representative token
     bool is_local; // local or global/function
     int align;     // alignment
 
@@ -218,6 +223,7 @@ struct Node
 
     // Numeric literal
     i64 val;
+    f64 fval;
 };
 
 Node *new_cast(Node *expr, Type *ty);
@@ -235,6 +241,8 @@ typedef enum
     TY_SHORT,
     TY_INT,
     TY_LONG,
+    TY_FLOAT,
+    TY_DOUBLE,
     TY_ENUM,
     TY_PTR,
     TY_FUNC,
@@ -262,6 +270,7 @@ struct Type
 
     // Declaration
     Token *name;
+    Token *name_pos;
 
     // Array
     int array_len;
@@ -302,7 +311,12 @@ extern Type *ty_ushort;
 extern Type *ty_uint;
 extern Type *ty_ulong;
 
+extern Type *ty_float;
+extern Type *ty_double;
+
 bool is_integer(Type *ty);
+bool is_flonum(Type *ty);
+bool is_numeric(Type *ty);
 Type *copy_type(Type *ty);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
