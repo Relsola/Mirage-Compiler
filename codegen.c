@@ -207,9 +207,9 @@ internal void cmp_zero(Type *ty)
     }
 
     if (is_integer(ty) && ty->size <= 4) {
-        println("  cmp eax, 0");
+        println("  test eax, eax");
     } else {
-        println("  cmp rax, 0");
+        println("  test rax, rax");
     }
 }
 
@@ -303,7 +303,7 @@ internal void cast(Type *from, Type *to)
     if (to->kind == TY_BOOL) {
         cmp_zero(from);
         println("  setne al");
-        println("  movsx eax, al");
+        println("  movzx eax, al");
         return;
     }
 
@@ -326,7 +326,7 @@ void gen_expr(Node *node)
         case TY_FLOAT:
             u.f32 = node->fval;
             println("  mov eax, %u  # float %f", u.u32, node->fval);
-            println("  movq xmm0, rax");
+            println("  movd xmm0, eax");
             return;
         case TY_DOUBLE:
             u.f64 = node->fval;
@@ -350,7 +350,7 @@ void gen_expr(Node *node)
             return;
         case TY_DOUBLE:
             println("  mov rax, 1");
-            println("  shl raX, 63");
+            println("  shl rax, 63");
             println("  movq xmm1, rax");
             println("  xorpd xmm0, xmm1");
             return;
@@ -379,10 +379,13 @@ void gen_expr(Node *node)
         cast(node->lhs->ty, node->ty);
         return;
     case ND_MEMZERO:
+        // RDI is callee-saved on Win64. Preserve it around REP STOSB.
+        println("  push rdi");
         println("  mov rcx, %d", node->var->ty->size);
         println("  lea rdi, [rbp + %d]", node->var->offset);
-        println("  mov al, 0");
+        println("  xor al, al");
         println("  rep stosb");
+        println("  pop rdi");
         return;
     case ND_ASSIGN:
         gen_addr(node->lhs);
@@ -411,7 +414,7 @@ void gen_expr(Node *node)
         gen_expr(node->lhs);
         cmp_zero(node->lhs->ty);
         println("  sete al");
-        println("  movsx rax, al");
+        println("  movzx eax, al");
         return;
     case ND_BITNOT:
         gen_expr(node->lhs);
@@ -425,10 +428,10 @@ void gen_expr(Node *node)
           gen_expr(node->rhs);
           cmp_zero(node->rhs->ty);
           println("  je .L.false.%d", c);
-          println("  mov rax, 1");
+          println("  mov eax, 1");
           println("  jmp .L.end.%d", c);
           println(".L.false.%d:", c);
-          println("  mov rax, 0");
+          println("  xor eax, eax");
           println(".L.end.%d:", c);
           return;
       }
@@ -440,10 +443,10 @@ void gen_expr(Node *node)
           gen_expr(node->rhs);
           cmp_zero(node->rhs->ty);
           println("  jne .L.true.%d", c);
-          println("  mov rax, 0");
+          println("  xor eax, eax");
           println("  jmp .L.end.%d", c);
           println(".L.true.%d:", c);
-          println("  mov rax, 1");
+          println("  mov eax, 1");
           println(".L.end.%d:", c);
           return;
       }
@@ -465,7 +468,10 @@ void gen_expr(Node *node)
         for (Node *arg = node->args; arg && nreg < regargs; arg = arg->next) {
             if (is_flonum(arg->ty)) {
                 popf(nreg);
-                println("  movq %s, xmm%d", argreg64[nreg], nreg);
+                // Win64 only requires mirroring FP args into GPRs for variadic calls.
+                if (node->func_ty && node->func_ty->is_variadic) {
+                    println("  movq %s, xmm%d", argreg64[nreg], nreg);
+                }
             } else {
                 pop(argreg64[nreg]);
             }
@@ -473,7 +479,6 @@ void gen_expr(Node *node)
         }
 
         println("  sub rsp, 32");
-        println("  mov rax, 0");
         println("  call %s", node->funcname);
         println("  add rsp, 32");
 
@@ -555,8 +560,7 @@ void gen_expr(Node *node)
                 println("  setae al");
             }
 
-            println("  and al, 1");
-            println("  movzx rax, al");
+            println("  movzx eax, al");
             return;
         default:
             error_tok(node->tok, "invalid expression");
@@ -588,12 +592,12 @@ void gen_expr(Node *node)
         println("  sub %s, %s", rax, r10);
         return;
     case ND_MUL:
-        println("  imul %s, %s", rax, r10);
+        println("  imul %s", r10);
         return;
     case ND_DIV:
     case ND_MOD:
         if (node->ty->is_unsigned) {
-            println("  mov %s, 0", rdx);
+            println("  xor %s, %s", rdx, rdx);
             println("  div %s", r10);
         } else {
             if (node->lhs->ty->size == 8) {
@@ -605,7 +609,7 @@ void gen_expr(Node *node)
         }
 
         if (node->kind == ND_MOD) {
-            println("  mov rax, rdx");
+            println("  mov %s, %s", rax, rdx);
         }
         return;
     case ND_BITAND:
@@ -641,7 +645,7 @@ void gen_expr(Node *node)
             }
         }
 
-        println("  movzx rax, al");
+        println("  movzx eax, al");
         return;
     case ND_SHL:
         println("  mov rcx, r10");
@@ -780,7 +784,7 @@ internal void emit_data(Obj *prog)
             continue;
         }
 
-        if (var->is_static) {
+        if (!var->is_static) {
             println("  .globl %s", var->name);
         }
         println("  .align %d", var->align);

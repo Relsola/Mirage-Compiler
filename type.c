@@ -135,7 +135,6 @@ void add_type(Node *node)
 
     add_type(node->lhs);
     add_type(node->rhs);
-    add_type(node->rhs);
     add_type(node->cond);
     add_type(node->then);
     add_type(node->els);
@@ -187,7 +186,7 @@ void add_type(Node *node)
         node->ty = ty_int;
         return;
     case ND_FUNCALL:
-        node->ty = ty_long;
+        node->ty = node->func_ty ? node->func_ty->return_ty : ty_long;
         return;
     case ND_NOT:
     case ND_LOGOR:

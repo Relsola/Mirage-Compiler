@@ -1252,6 +1252,14 @@ internal void gvar_initializer(Token **rest, Token *tok, Obj *var)
 // Returns true if a given token represents a type.
 internal bool is_typename(Token *tok)
 {
+    if (tok->kind == TK_IDENT) {
+        return find_typedef(tok);
+    }
+
+    if (tok->kind != TK_KEYWORD) {
+        return false;
+    }
+
     local_persist char *kw[] = {
         "void", "_Bool", "char", "short", "int", "long", "struct", "union",
         "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
@@ -1265,7 +1273,7 @@ internal bool is_typename(Token *tok)
         }
     }
 
-    return find_typedef(tok);
+    return false;
 }
 
 // compound-stmt = (typedef | declaration | stmt)* "}"

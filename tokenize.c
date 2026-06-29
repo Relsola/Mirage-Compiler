@@ -104,8 +104,12 @@ internal Token *new_token(TokenKind kind, char *start, char *end)
 
 internal bool startswith(char *p, char *q)
 {
-    bool result = strncmp(p, q, strlen(q)) == 0;
-    return result;
+    while (*q) {
+        if (*p++ != *q++) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Returns true if c is valid as the first character of an identifier.
@@ -125,35 +129,71 @@ internal bool is_ident2(char c)
 // Read a punctuator token from p and returns its length.
 internal int read_punct(char *p)
 {
-    local_persist char *kw[] = {
-        "<<=", ">>=", "...", "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=",
-        "++", "--", "%=", "&=", "|=", "^=", "&&", "||", "<<", ">>"
-    };
+    char c0 = p[0];
+    char c1 = p[1];
+    char c2 = p[2];
 
-    for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
-        if (startswith(p, kw[i])) {
-            return strlen(kw[i]);
-        }
+    if ((c0 == '<' && c1 == '<' && c2 == '=') ||
+        (c0 == '>' && c1 == '>' && c2 == '=') ||
+        (c0 == '.' && c1 == '.' && c2 == '.')) {
+        return 3;
     }
+
+    if ((c0 == '=' && c1 == '=') || (c0 == '!' && c1 == '=') ||
+        (c0 == '<' && c1 == '=') || (c0 == '>' && c1 == '=') ||
+        (c0 == '-' && c1 == '>') || (c0 == '+' && c1 == '=') ||
+        (c0 == '-' && c1 == '=') || (c0 == '*' && c1 == '=') ||
+        (c0 == '/' && c1 == '=') || (c0 == '+' && c1 == '+') ||
+        (c0 == '-' && c1 == '-') || (c0 == '%' && c1 == '=') ||
+        (c0 == '&' && c1 == '=') || (c0 == '|' && c1 == '=') ||
+        (c0 == '^' && c1 == '=') || (c0 == '&' && c1 == '&') ||
+        (c0 == '|' && c1 == '|') || (c0 == '<' && c1 == '<') ||
+        (c0 == '>' && c1 == '>')) {
+        return 2;
+    }
+
     return ispunct(*p) ? 1 : 0;
 }
 
 internal bool is_keyword(Token *tok)
 {
-    local_persist char *kw[] = {
-        "void", "char", "short", "long", "int", "struct", "union", "_Bool",
-        "return", "if", "else", "for", "while", "sizeof", "typedef", "enum",
-        "static", "goto", "break", "continue", "switch", "case", "default",
-        "extern", "_Alignof", "_Alignas", "do", "signed", "unsigned", "const",
-        "volatile", "auto", "register", "restrict", "__restrict", "__restrict__",
-        "_Noreturn", "float", "double"
-    };
-
-    for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++) {
-        if (equal(tok, kw[i])) {
-            return true;
-        }
+    if (tok->kind != TK_IDENT) {
+        return false;
     }
+
+#define KW(s) (tok->len == (int)(sizeof(s) - 1) && memcmp(tok->loc, s, sizeof(s) - 1) == 0)
+
+    switch (tok->len) {
+    case 2:
+        return KW("if") || KW("do");
+    case 3:
+        return KW("for") || KW("int");
+    case 4:
+        return KW("void") || KW("char") || KW("long") || KW("else") ||
+               KW("enum") || KW("goto") || KW("case") || KW("auto");
+    case 5:
+        return KW("_Bool") || KW("short") || KW("while") || KW("break") ||
+               KW("float") || KW("union") || KW("const");
+    case 6:
+        return KW("struct") || KW("return") || KW("sizeof") || KW("static") ||
+               KW("extern") || KW("signed") || KW("double") || KW("switch");
+    case 7:
+        return KW("typedef") || KW("default");
+    case 8:
+        return KW("continue") || KW("unsigned") || KW("_Alignof") || KW("_Alignas") ||
+               KW("volatile") || KW("register") || KW("restrict");
+    case 9:
+        return KW("_Noreturn");
+    case 10:
+        return KW("__restrict");
+    case 12:
+        return KW("__restrict__");
+    default:
+        return false;
+    }
+
+#undef KW
+
     return false;
 }
 
