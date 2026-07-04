@@ -66,7 +66,8 @@ struct Token
     Type *ty;       // Used if TK_NUM or TK_STR
     char *str;      // String literal contents including terminating '\0'
 
-    int line_no; // Line number
+    int line_no;    // Line number
+    bool at_bol;    // True if this token is at beginning of line
 };
 
 __attribute__((noreturn)) void error(char *fmt, ...);
@@ -78,7 +79,14 @@ __attribute__((noreturn)) void error_tok(Token *tok, char *fmt, ...);
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *s);
 bool consume(Token **rest, Token *tok, char *str);
-Token *tokenize_file(char *filename);
+void convert_keywords(Token *tok);
+Token *tokenize_file(const char *filename);
+
+//
+// preprocess.c
+//
+
+Token *preprocess(Token *tok);
 
 //
 // parse.c
@@ -205,7 +213,6 @@ struct Node
     Member *member;
 
     // Function call
-    char *funcname;
     Type *func_ty;
     Node *args;
 
@@ -335,6 +342,14 @@ int align_to(int n, int align);
 //
 // string.s
 //
+typedef struct StringArray StringArray;
+struct StringArray
+{
+    char **data;
+    int capacity;
+    int len;
+};
 
+void strarray_push(StringArray *arr, char *s);
 char *strndup(const char *source, u32 size);
 char *format(const char *fmt, ...);

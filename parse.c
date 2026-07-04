@@ -149,6 +149,7 @@ internal Node *cast(Token **rest, Token *tok);
 internal Type *struct_decl(Token **rest, Token *tok);
 internal Type *union_decl(Token **rest, Token *tok);
 internal Node *postfix(Token **rest, Token *tok);
+internal Node *funcall(Token **rest, Token *tok, Node *node);
 internal Node *unary(Token **rest, Token *tok);
 internal Node *primary(Token **rest, Token *tok);
 internal Node *builtin_va_start(Token **rest, Token *tok);
@@ -613,11 +614,17 @@ internal Type *func_params(Token **rest, Token *tok, Type *ty)
         Type *ty2 = declspec(&tok, tok, NULL);
         ty2 = declarator(&tok, tok, ty2);
 
-        // "array of T" is converted to "pointer to T" only in the parameter
-        // context. For example, *argv[] is converted to **argv by this.
+        Token *name = ty2->name;
+
         if (ty2->kind == TY_ARRAY) {
-            Token *name = ty2->name;
+            // "array of T" is converted to "pointer to T" only in the parameter
+            // context. For example, *argv[] is converted to **argv by this.
             ty2 = pointer_to(ty2->base);
+            ty2->name = name;
+        } else if (ty2->kind == TY_FUNC) {
+            // Likewise, a function is converted to a pointer to a function
+            // only in the parameter context.
+            ty2 = pointer_to(ty2);
             ty2->name = name;
         }
 
@@ -2331,7 +2338,15 @@ internal Node *new_inc_dec(Node *node, Token *tok, int addend)
 }
 
 // postfix = "(" type-name ")" "{" initializer-list "}"
-//         | primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
+//         = ident "(" func-args ")" postfix-tail*
+//         | primary postfix-tail*
+//
+// postfix-tail = "[" expr "]"
+//              | "(" func-args ")"
+//              | "." ident
+//              | "->" ident
+//              | "++"
+//              | "--"
 internal Node *postfix(Token **rest, Token *tok)
 {
     if (equal(tok, "(") && is_typename(tok->next)) {
@@ -2355,6 +2370,11 @@ internal Node *postfix(Token **rest, Token *tok)
     Node *node = primary(&tok, tok);
 
     for (;;) {
+        if (equal(tok, "(")) {
+            node = funcall(&tok, tok->next, node);
+            continue;
+        }
+
         if (equal(tok, "[")) {
             // x[y] is short for *(x+y)
             Token *start = tok;
@@ -2395,21 +2415,16 @@ internal Node *postfix(Token **rest, Token *tok)
     }
 }
 
-// funcall = ident "(" (assign ("," assign)*)? ")"
-internal Node *funcall(Token **rest, Token *tok)
+// funcall = (assign ("," assign)*)? ")"
+internal Node *funcall(Token **rest, Token *tok, Node *fn)
 {
-    Token *start = tok;
-    tok = tok->next->next;
+    add_type(fn);
 
-    VarScope *sc = find_var(start);
-    if (!sc) {
-        error_tok(start, "implicit declaration of a function");
-    }
-    if (!sc->var || sc->var->ty->kind != TY_FUNC) {
-        error_tok(start, "not a function");
+    if (fn->ty->kind != TY_FUNC && (fn->ty->kind != TY_PTR || fn->ty->base->kind != TY_FUNC)) {
+        error_tok(fn->tok, "not a function");
     }
 
-    Type *ty = sc->var->ty;
+    Type *ty = (fn->ty->kind == TY_FUNC) ? fn->ty : fn->ty->base;
     Type *param_ty = ty->params;
 
     Node head = {};
@@ -2446,8 +2461,7 @@ internal Node *funcall(Token **rest, Token *tok)
     }
     *rest = skip(tok, ")");
 
-    Node *node = new_node(ND_FUNCALL, start);
-    node->funcname = strndup(start->loc, start->len);
+    Node *node = new_unary(ND_FUNCALL, fn, tok);
     node->func_ty = ty;
     node->ty = ty->return_ty;
     node->args = head.next;
@@ -2508,7 +2522,7 @@ internal Node *builtin_va_end(Token **rest, Token *tok)
 //         | "sizeof" "(" type-name ")"
 //         | "sizeof" unary
 //         | "_Alignof" "(" type-name ")"
-//         | ident func-args?
+//         | ident
 //         | str
 //         | num
 internal Node *primary(Token **rest, Token *tok)
@@ -2566,27 +2580,23 @@ internal Node *primary(Token **rest, Token *tok)
     }
 
     if (tok->kind == TK_IDENT) {
-        // Function call
-        if (equal(tok->next, "(")) {
-            Node *node = funcall(rest, tok);
-            return node;
-        }
-
         // Variable or enum constant
         VarScope *sc = find_var(tok);
-        if (!sc || (!sc->var && !sc->enum_ty)) {
-            error_tok(tok, "undefined variable");
-        }
-
-        Node *node;
-        if (sc->var) {
-            node = new_var_node(sc->var, tok);
-        } else {
-            node = new_num(sc->enum_val, tok);
-        }
-
         *rest = tok->next;
-        return node;
+
+        if (sc) {
+            if (sc->var) {
+                return new_var_node(sc->var, tok);
+            }
+            if (sc->enum_ty) {
+                return new_num(sc->enum_val, tok);
+            }
+        }
+
+        if (equal(tok->next, "(")) {
+            error_tok(tok, "implicit declaration of a function");
+        }
+        error_tok(tok, "undefined variable");
     }
 
     if (tok->kind == TK_STR) {

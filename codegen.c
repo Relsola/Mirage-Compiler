@@ -96,6 +96,7 @@ internal void gen_addr(Node *node)
             // Local variable
             println("  lea rax, [rbp + %d]", node->var->offset);
         } else {
+            // Global variable and function
             println("  lea rax, [rip + %s]", node->var->name);
         }
         return;
@@ -119,6 +120,7 @@ internal void gen_addr(Node *node)
 internal void load(Type *ty)
 {
     switch (ty->kind) {
+    case TY_FUNC:
     case TY_ARRAY:
     case TY_STRUCT:
     case TY_UNION:
@@ -455,6 +457,9 @@ void gen_expr(Node *node)
         int regargs = nargs < 4 ? nargs : 4;
         int stack_args = nargs - regargs;
 
+        gen_expr(node->lhs);
+        push();
+
         // For Win64, stack arguments must be located right above the 32-byte
         // shadow space. Insert optional 8-byte padding *below* stack args.
         bool needs_pad = ((depth + stack_args) % 2) != 0;
@@ -478,8 +483,9 @@ void gen_expr(Node *node)
             nreg++;
         }
 
+        println("  mov r10, [rsp + %d]", stack_args * 8 + (needs_pad ? 8 : 0));
         println("  sub rsp, 32");
-        println("  call %s", node->funcname);
+        println("  call r10");
         println("  add rsp, 32");
 
         if (stack_args) {
@@ -491,6 +497,8 @@ void gen_expr(Node *node)
             println("  add rsp, 8");
             depth--;
         }
+
+        pop("r10");
 
         // It looks like the most significant 48 or 56 bits in RAX may
         // contain garbage if a function return type is short or bool/char,

@@ -1,10 +1,13 @@
 #include "mirage.h"
 
 // Input filename
-internal char *current_filename;
+internal const char * current_filename;
 
 // Input string
-internal char *current_input;
+internal const char *current_input;
+
+// True if the current position is at the beginning of a line
+internal bool at_bol;
 
 // Reports an error message in the following format.
 //
@@ -49,7 +52,7 @@ void error(char *fmt, ...)
 void error_at(char *loc, char *fmt, ...)
 {
     int line_no = 1;
-    for (char *p = current_input; p < loc; p++) {
+    for (const char *p = current_input; p < loc; p++) {
         if (*p == '\n') {
             line_no++;
         }
@@ -99,6 +102,8 @@ internal Token *new_token(TokenKind kind, char *start, char *end)
     tok->kind = kind;
     tok->loc = start;
     tok->len = end - start;
+    tok->at_bol = at_bol;
+    at_bol = false;
     return tok;
 }
 
@@ -197,7 +202,7 @@ internal bool is_keyword(Token *tok)
     return false;
 }
 
-internal void convert_keywords(Token *tok)
+void convert_keywords(Token *tok)
 {
     for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
         if (is_keyword(t)) {
@@ -437,7 +442,7 @@ internal Token *read_number(char *start)
 // Initialize line info for all tokens.
 internal void add_line_numbers(Token *tok)
 {
-    char *p = current_input;
+    const char *p = current_input;
     int n = 1;
 
     do {
@@ -452,12 +457,14 @@ internal void add_line_numbers(Token *tok)
 }
 
 // Tokenize a given string and returns new tokens.
-internal Token *tokenize(char *filename, char *p)
+internal Token *tokenize(const char *filename, char *p)
 {
     current_filename = filename;
     current_input = p;
     Token head = {};
     Token *cur = &head;
+
+    at_bol = false;
 
     while (*p) {
         // Skip line comments.
@@ -482,6 +489,13 @@ internal Token *tokenize(char *filename, char *p)
         // Skip whitespace characters
         if (isspace(*p)) {
             p++;
+            continue;
+        }
+
+        // Skip newline.
+        if (*p == '\n') {
+            p++;
+            at_bol = true;
             continue;
         }
 
@@ -529,12 +543,11 @@ internal Token *tokenize(char *filename, char *p)
 
     cur = cur->next = new_token(TK_EOF, p, p);
     add_line_numbers(head.next);
-    convert_keywords(head.next);
     return head.next;
 }
 
 // Returns the contents of a given file.
-internal char *read_file(char *path)
+internal char *read_file(const char *path)
 {
     FILE *fp;
 
@@ -604,7 +617,7 @@ __terminate_source:
     return buf;
 }
 
-Token *tokenize_file(char *path)
+Token *tokenize_file(const char *path)
 {
     return tokenize(path, read_file(path));
 }
