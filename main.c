@@ -3,6 +3,7 @@
 
 internal char *opt_o;
 internal bool opt_S;
+internal bool opt_E;
 internal bool opt_c;
 
 internal StringArray input_paths;
@@ -37,6 +38,11 @@ internal void parse_args(int argc, char **argv)
 
         if (!strcmp(argv[i], "-S")) {
             opt_S = true;
+            continue;
+        }
+
+        if (!strcmp(argv[i], "-E")) {
+            opt_E = true;
             continue;
         }
 
@@ -119,17 +125,48 @@ internal char *create_tmpfile(void)
     return tmp_filename;
 }
 
-internal void compiler_to_asm(const char *input, const char *output)
+// Print tokens to stdout. Used for -E.
+internal void print_tokens(Token *tok)
+{
+    FILE *out = open_file(opt_o ? opt_o : "-");
+
+    int line = 1;
+    for (; tok->kind != TK_EOF; tok = tok->next) {
+        if (line > 1 && tok->at_bol) {
+            fprintf(out, "\n");
+        }
+        if (tok->has_space && !tok->at_bol) {
+            fprintf(out, " ");
+        }
+        fprintf(out, "%.*s", tok->len, tok->loc);
+        line++;
+    }
+    fprintf(out, "\n");
+}
+
+internal void compiler_to_asm(char *input_file, char *output_file)
 {
     // Tokenize and parse.
-    Token *tok = tokenize_file(input);
+    Token *tok = tokenize_file(input_file);
+    if (!tok) {
+        char err_buf[256];
+        strerror_s(err_buf, sizeof(err_buf), errno);
+        error("%s: %s", input_file, err_buf);
+    }
+
     tok = preprocess(tok);
+
+    // If -E is given, print out preprocessed C code as a result.
+    if (opt_E) {
+        print_tokens(tok);
+        return;
+    }
+
     Obj *prog = parse(tok);
 
     // Traverse the AST to emit assembly.
-    FILE *out = open_file(output);
+    FILE *out = open_file(output_file);
     fprintf(out, "  .intel_syntax noprefix\n");
-    fprintf(out, ".file 1 \"%s\"\n", input);
     codegen(prog, out);
 
     if (out != stdout) {
@@ -168,12 +205,12 @@ internal void run_subprocess(char *cmdline)
     }
 }
 
-internal void compiler_to_obj(char *input, char *output)
+internal void compiler_to_obj(char *input_file, char *output_file)
 {
     char *cmd = format(
         "clang -c -x assembler \"%s\" -o \"%s\"",
-        input,
-        output);
+        input_file,
+        output_file);
 
     run_subprocess(cmd);
 }
@@ -183,31 +220,31 @@ int main(int argc, char **argv)
     atexit(cleanup);
     parse_args(argc, argv);
 
-    if (input_paths.len > 1 && opt_o && (opt_c || opt_S)) {
-        error("cannot specify '-o' with '-c' or '-S' with multiple files");
-    }
+  if (input_paths.len > 1 && opt_o && (opt_c || opt_S | opt_E)){
+    error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");}
+
 
     for (int i = 0; i < input_paths.len; ++i) {
-        char *input = input_paths.data[i];
+        char *input_file = input_paths.data[i];
 
-        char *output;
+        char *output_file;
         if (opt_o) {
-            output = opt_o;
+            output_file = opt_o;
         } else if (opt_S) {
-            output = replace_extension(input, ".s");
+            output_file = replace_extension(input_file, ".s");
         } else {
-            output = replace_extension(input, ".obj");
+            output_file = replace_extension(input_file, ".obj");
         }
 
-        if (opt_S) {
-            compiler_to_asm(input, output);
-            return 0;
+        if (opt_S || opt_E) {
+            compiler_to_asm(input_file, output_file);
+            continue;
         }
 
         // Traverse the AST to emit assembly.
         char *tmpfile = create_tmpfile();
-        compiler_to_asm(input, tmpfile);
-        compiler_to_obj(tmpfile, output);
+        compiler_to_asm(input_file, tmpfile);
+        compiler_to_obj(tmpfile, output_file);
     }
 
     return 0;

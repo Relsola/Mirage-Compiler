@@ -15,7 +15,7 @@ for %%f in (test\*.c) do (
     set "tmp_obj=build\%%~nf.obj"
     set "tmp_exe=build\%%~nf.exe"
 
-    clang -o- -E -P -C %%f | build\mirage.exe -c -o !tmp_obj! -
+    build\mirage.exe -c -o !tmp_obj! %%f
     if !errorlevel! neq 0 exit /b !errorlevel!
 
     clang -o !tmp_exe! !tmp_obj! -xc test/common

@@ -35,6 +35,7 @@ typedef struct Type Type;
 typedef struct Node Node;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
+typedef struct Hideset Hideset;
 
 //
 // tokenize.c
@@ -51,23 +52,32 @@ typedef enum
     TK_EOF,     // End-of-file markers
 } TokenKind;
 
-// Token type
-typedef struct Token Token;
+typedef struct File File;
+struct File
+{
+    char *name;
+    int file_no;
+    char *contents;
+};
+
 // Token type
 typedef struct Token Token;
 struct Token
 {
-    TokenKind kind; // Token kind
-    Token *next;    // Next token
-    i64 val;        // If kind is TK_NUM, its value
-    f64 fval;       // If kind is TK_NUM, its value
-    char *loc;      // Token location
-    int len;        // Token length
-    Type *ty;       // Used if TK_NUM or TK_STR
-    char *str;      // String literal contents including terminating '\0'
+    TokenKind kind;   // Token kind
+    Token *next;      // Next token
+    i64 val;          // If kind is TK_NUM, its value
+    f64 fval;         // If kind is TK_NUM, its value
+    char *loc;        // Token location
+    int len;          // Token length
+    Type *ty;         // Used if TK_NUM or TK_STR
+    char *str;        // String literal contents including terminating '\0'
 
-    int line_no;    // Line number
-    bool at_bol;    // True if this token is at beginning of line
+    File *file;       // Source location
+    int line_no;      // Line number
+    bool at_bol;      // True if this token is at beginning of line
+    bool has_space;   // True if this token follows a space character
+    Hideset *hideset; // For macro expansion
 };
 
 __attribute__((noreturn)) void error(char *fmt, ...);
@@ -76,11 +86,15 @@ __attribute__((noreturn)) void error_tok(Token *tok, char *fmt, ...);
 
 #define m__unreachable() error("internal error at %s:%d", __FILE__, __LINE__)
 
+void warn_tok(Token *tok, char *fmt, ...);
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *s);
 bool consume(Token **rest, Token *tok, char *str);
 void convert_keywords(Token *tok);
-Token *tokenize_file(const char *filename);
+File **get_input_files(void);
+File *new_file(char *name, int file_no, char *contents);
+Token *tokenize(File *file);
+Token *tokenize_file(char *filename);
 
 //
 // preprocess.c
@@ -233,6 +247,7 @@ struct Node
     f64 fval;
 };
 
+i64 const_expr(Token **rest, Token *tok);
 Node *new_cast(Node *expr, Type *ty);
 Obj *parse(Token *tok);
 

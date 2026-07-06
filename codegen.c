@@ -909,9 +909,36 @@ internal void emit_text(Obj *prog)
     }
 }
 
+internal char *escape_for_gas(const char *s){
+    u64 len = 0;
+    for (const char *p = s; *p; ++p) {
+        if (*p == '\\' || *p == '"') {
+            ++len;
+        }
+        ++len;
+    }
+
+    char *escape = calloc(1, len + 1);
+    len = 0;
+    for (const char *p = s; *p; ++p) {
+        if (*p == '\\' || *p == '"') {
+            escape[len++] = '\\';
+        }
+        escape[len++] = *p;
+    }
+    escape[len] = '\0';
+
+    return escape;
+}
+
 void codegen(Obj *prog, FILE *out)
 {
     output_file = out;
+
+    File **files = get_input_files();
+    for (int i = 0; files[i]; i++) {
+        println("  .file %d \"%s\"", files[i]->file_no, escape_for_gas(files[i]->name));
+    }
 
     assign_lvar_offsets(prog);
     emit_data(prog);

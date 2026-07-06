@@ -159,7 +159,6 @@ internal Token *parse_typedef(Token *tok, Type *basety);
 internal bool is_function(Token *tok);
 internal Token *function(Token *tok, Type *basety, VarAttr *attr);
 internal Token *global_var(Token *tok, Type *basety, VarAttr *attr);
-internal i64 const_expr(Token **rest, Token *tok);
 internal i64 eval(Node *node);
 internal i64 eval2(Node *node, char **label);
 internal i64 eval_rval(Node *node, char **label);
@@ -1732,7 +1731,7 @@ internal double eval_double(Node *node)
     }
 }
 
-internal i64 const_expr(Token **rest, Token *tok)
+i64 const_expr(Token **rest, Token *tok)
 {
     Node *node = conditional(rest, tok);
     return eval(node);

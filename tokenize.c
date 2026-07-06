@@ -1,33 +1,36 @@
 #include "mirage.h"
 
-// Input filename
-internal const char * current_filename;
+// Input file
+internal File *current_file;
 
-// Input string
-internal const char *current_input;
+// A list of all input files.
+internal File **input_files;
 
 // True if the current position is at the beginning of a line
 internal bool at_bol;
+
+// True if the current position follows a space character
+internal bool has_space;
 
 // Reports an error message in the following format.
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-internal void verror_at(int line_no, char *loc, char *fmt, va_list ap)
+internal void verror_at(char *filename, char *input, int line_no, char *loc, char *fmt, va_list ap)
 {
     // Find a line containing `loc`.
     char *line = loc;
-    while (current_input < line && line[-1] != '\n') {
+    while (input < line && line[-1] != '\n') {
         --line;
     }
 
     char *end = loc;
-    while (*end != '\n') {
+    while (*end && *end != '\n') {
         ++end;
     }
 
     // Print out the line.
-    int indent = fprintf(stderr, "%s:%d: ", current_filename, line_no);
+    int indent = fprintf(stderr, "%s:%d: ", filename, line_no);
     fprintf(stderr, "%.*s\n", (int)(end - line), line);
 
     // Show the error message.
@@ -52,7 +55,7 @@ void error(char *fmt, ...)
 void error_at(char *loc, char *fmt, ...)
 {
     int line_no = 1;
-    for (const char *p = current_input; p < loc; p++) {
+    for (char *p = current_file->contents; p < loc; p++) {
         if (*p == '\n') {
             line_no++;
         }
@@ -60,7 +63,7 @@ void error_at(char *loc, char *fmt, ...)
 
     va_list ap;
     va_start(ap, fmt);
-    verror_at(line_no, loc, fmt, ap);
+    verror_at(current_file->name, current_file->contents, line_no, loc, fmt, ap);
     exit(1);
 }
 
@@ -68,8 +71,16 @@ void error_tok(Token *tok, char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    verror_at(tok->line_no, tok->loc, fmt, ap);
+    verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc, fmt, ap);
     exit(1);
+}
+
+void warn_tok(Token *tok, char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc, fmt, ap);
+    va_end(ap);
 }
 
 bool equal(Token *tok, char *op)
@@ -102,8 +113,11 @@ internal Token *new_token(TokenKind kind, char *start, char *end)
     tok->kind = kind;
     tok->loc = start;
     tok->len = end - start;
+    tok->file = current_file;
     tok->at_bol = at_bol;
-    at_bol = false;
+    tok->has_space = has_space;
+
+    at_bol = has_space = false;
     return tok;
 }
 
@@ -118,46 +132,66 @@ internal bool startswith(char *p, char *q)
 }
 
 // Returns true if c is valid as the first character of an identifier.
-internal bool is_ident1(char c)
+internal bool is_ident1(const char c)
 {
     bool result = ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || c == '_';
     return result;
 }
 
 // Returns true if c is valid as a non-first character of an identifier.
-internal bool is_ident2(char c)
+internal bool is_ident2(const char c)
 {
     bool result = is_ident1(c) || ('0' <= c && c <= '9');
     return result;
 }
 
 // Read a punctuator token from p and returns its length.
-internal int read_punct(char *p)
+internal int read_punct(const char *p)
 {
-    char c0 = p[0];
-    char c1 = p[1];
-    char c2 = p[2];
+    int size = 0;
+    char c0;
+    char c1;
+    char c2;
 
-    if ((c0 == '<' && c1 == '<' && c2 == '=') ||
-        (c0 == '>' && c1 == '>' && c2 == '=') ||
-        (c0 == '.' && c1 == '.' && c2 == '.')) {
-        return 3;
+    if (ispunct(p[0])) {
+        c0 = p[0];
+        ++size;
     }
 
-    if ((c0 == '=' && c1 == '=') || (c0 == '!' && c1 == '=') ||
-        (c0 == '<' && c1 == '=') || (c0 == '>' && c1 == '=') ||
-        (c0 == '-' && c1 == '>') || (c0 == '+' && c1 == '=') ||
-        (c0 == '-' && c1 == '=') || (c0 == '*' && c1 == '=') ||
-        (c0 == '/' && c1 == '=') || (c0 == '+' && c1 == '+') ||
-        (c0 == '-' && c1 == '-') || (c0 == '%' && c1 == '=') ||
-        (c0 == '&' && c1 == '=') || (c0 == '|' && c1 == '=') ||
-        (c0 == '^' && c1 == '=') || (c0 == '&' && c1 == '&') ||
-        (c0 == '|' && c1 == '|') || (c0 == '<' && c1 == '<') ||
-        (c0 == '>' && c1 == '>')) {
-        return 2;
+    if (size == 1 && ispunct(p[1])) {
+        c1 = p[1];
+        ++size;
     }
 
-    return ispunct(*p) ? 1 : 0;
+    if (size == 2 && ispunct(p[2])) {
+        c2 = p[2];
+        ++size;
+    }
+
+    if (size == 3) {
+        if ((c0 == '<' && c1 == '<' && c2 == '=') ||
+            (c0 == '>' && c1 == '>' && c2 == '=') ||
+            (c0 == '.' && c1 == '.' && c2 == '.')) {
+            return 3;
+        }
+    }
+
+    if (size >= 2) {
+        if ((c0 == '=' && c1 == '=') || (c0 == '!' && c1 == '=') ||
+            (c0 == '<' && c1 == '=') || (c0 == '>' && c1 == '=') ||
+            (c0 == '-' && c1 == '>') || (c0 == '+' && c1 == '=') ||
+            (c0 == '-' && c1 == '=') || (c0 == '*' && c1 == '=') ||
+            (c0 == '/' && c1 == '=') || (c0 == '+' && c1 == '+') ||
+            (c0 == '-' && c1 == '-') || (c0 == '%' && c1 == '=') ||
+            (c0 == '&' && c1 == '=') || (c0 == '|' && c1 == '=') ||
+            (c0 == '^' && c1 == '=') || (c0 == '&' && c1 == '&') ||
+            (c0 == '|' && c1 == '|') || (c0 == '<' && c1 == '<') ||
+            (c0 == '>' && c1 == '>') || (c0 == '#' && c1 == '#')) {
+            return 2;
+        }
+    }
+
+    return c0 ? 1 : 0;
 }
 
 internal bool is_keyword(Token *tok)
@@ -442,7 +476,7 @@ internal Token *read_number(char *start)
 // Initialize line info for all tokens.
 internal void add_line_numbers(Token *tok)
 {
-    const char *p = current_input;
+    char *p = current_file->contents;
     int n = 1;
 
     do {
@@ -457,14 +491,16 @@ internal void add_line_numbers(Token *tok)
 }
 
 // Tokenize a given string and returns new tokens.
-internal Token *tokenize(const char *filename, char *p)
+Token *tokenize(File *file)
 {
-    current_filename = filename;
-    current_input = p;
+    current_file = file;
+
+    char *p = file->contents;
     Token head = {};
     Token *cur = &head;
 
-    at_bol = false;
+    at_bol = true;
+    has_space = false;
 
     while (*p) {
         // Skip line comments.
@@ -473,6 +509,7 @@ internal Token *tokenize(const char *filename, char *p)
             while (*p != '\n') {
                 p++;
             }
+            has_space = true;
             continue;
         }
 
@@ -483,12 +520,7 @@ internal Token *tokenize(const char *filename, char *p)
                 error_at(p, "unclosed block comment");
             }
             p = q + 2;
-            continue;
-        }
-
-        // Skip whitespace characters
-        if (isspace(*p)) {
-            p++;
+            has_space = true;
             continue;
         }
 
@@ -496,6 +528,14 @@ internal Token *tokenize(const char *filename, char *p)
         if (*p == '\n') {
             p++;
             at_bol = true;
+            has_space = false;
+            continue;
+        }
+
+        // Skip whitespace characters
+        if (isspace(*p)) {
+            p++;
+            has_space = true;
             continue;
         }
 
@@ -555,11 +595,9 @@ internal char *read_file(const char *path)
         // By convention, read from stdin if a given filename is "-".
         fp = stdin;
     } else {
-        errno_t err = fopen_s(&fp, path, "rb");
-        if (err || !fp) {
-            char err_buf[256];
-            strerror_s(err_buf, sizeof(err_buf), err);
-            error("cannot open %s: %s", path, err_buf);
+        fopen_s(&fp, path, "rb");
+        if (!fp) {
+            return nullptr;
         }
     }
 
@@ -617,7 +655,33 @@ __terminate_source:
     return buf;
 }
 
-Token *tokenize_file(const char *path)
+File **get_input_files(void) {
+  return input_files;
+}
+
+File *new_file(char *name, int file_no, char *contents) {
+  File *file = calloc(1, sizeof(File));
+  file->name = name;
+  file->file_no = file_no;
+  file->contents = contents;
+  return file;
+}
+
+Token *tokenize_file(char *path)
 {
-    return tokenize(path, read_file(path));
+    char *contents = read_file(path);
+    if (!contents) {
+        return nullptr;
+    }
+
+    local_persist int file_no;
+    File *file = new_file(path, file_no + 1, contents);
+
+    // Save the filename for assembler .file directive.
+    input_files = realloc(input_files, sizeof(char *) * (file_no + 2));
+    input_files[file_no] = file;
+    input_files[file_no + 1] = nullptr;
+    file_no++;
+
+    return tokenize(file);
 }
