@@ -18,7 +18,7 @@ Type *ty_double = &(Type){ TY_DOUBLE, 8, 8 };
 
 internal Type *new_type(TypeKind kind, int size, int align)
 {
-    Type *ty = calloc(1, sizeof(Type));
+    Type *ty = arena_push(1, sizeof(Type));
     ty->kind = kind;
     ty->size = size;
     ty->align = align;
@@ -44,7 +44,7 @@ bool is_numeric(Type *ty)
 
 Type *copy_type(Type *ty)
 {
-    Type *ret = calloc(1, sizeof(Type));
+    Type *ret = arena_push(1, sizeof(Type));
     *ret = *ty;
     return ret;
 }
@@ -59,7 +59,7 @@ Type *pointer_to(Type *base)
 
 Type *func_type(Type *return_ty)
 {
-    Type *ty = calloc(1, sizeof(Type));
+    Type *ty = arena_push(1, sizeof(Type));
     ty->kind = TY_FUNC;
     ty->return_ty = return_ty;
     return ty;

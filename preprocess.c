@@ -98,7 +98,7 @@ internal Token *skip_line(Token *tok)
 
 internal Token *copy_token(Token *tok)
 {
-    Token *t = calloc(1, sizeof(Token));
+    Token *t = arena_push(1, sizeof(Token));
     *t = *tok;
     t->next = nullptr;
     return t;
@@ -114,7 +114,7 @@ internal Token *new_eof(Token *tok)
 
 internal Hideset *new_hideset(char *name)
 {
-    Hideset *hs = calloc(1, sizeof(Hideset));
+    Hideset *hs = arena_push(1, sizeof(Hideset));
     hs->name = name;
     return hs;
 }
@@ -232,7 +232,7 @@ internal char *quote_string(char *str)
         bufsize++;
     }
 
-    char *buf = calloc(1, bufsize);
+    char *buf = arena_push(1, bufsize);
     char *p = buf;
     *p++ = '"';
     for (int i = 0; str[i]; i++) {
@@ -344,7 +344,7 @@ internal long eval_const_expr(Token **rest, Token *tok)
 
 internal CondIncl *push_cond_incl(Token *tok, bool included)
 {
-    CondIncl *ci = calloc(1, sizeof(CondIncl));
+    CondIncl *ci = arena_push(1, sizeof(CondIncl));
     ci->next = cond_incl;
     ci->ctx = IN_THEN;
     ci->tok = tok;
@@ -369,7 +369,7 @@ internal Macro *find_macro(Token *tok)
 
 internal Macro *add_macro(char *name, bool is_objlike, Token *body)
 {
-    Macro *m = calloc(1, sizeof(Macro));
+    Macro *m = arena_push(1, sizeof(Macro));
     m->next = macros;
     m->name = name;
     m->is_objlike = is_objlike;
@@ -392,7 +392,7 @@ internal MacroParam *read_macro_params(Token **rest, Token *tok)
             error_tok(tok, "expected an identifier");
         }
 
-        MacroParam *m = calloc(1, sizeof(MacroParam));
+        MacroParam *m = arena_push(1, sizeof(MacroParam));
         m->name = strndup(tok->loc, tok->len);
         cur = cur->next = m;
         tok = tok->next;
@@ -443,7 +443,7 @@ internal MacroArg *read_macro_arg_one(Token **rest, Token *tok)
 
     cur->next = new_eof(tok);
 
-    MacroArg *arg = calloc(1, sizeof(MacroArg));
+    MacroArg *arg = arena_push(1, sizeof(MacroArg));
     arg->tok = head.next;
     *rest = tok;
     return arg;
@@ -496,7 +496,7 @@ internal char *join_tokens(Token *tok, Token *end)
         len += t->len;
     }
 
-    char *buf = calloc(1, len);
+    char *buf = arena_push(1, len);
 
     // Copy token texts.
     int pos = 0;

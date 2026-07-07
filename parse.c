@@ -166,7 +166,7 @@ internal f64 eval_double(Node *node);
 
 internal void enter_scope(void)
 {
-    Scope *sc = calloc(1, sizeof(Scope));
+    Scope *sc = arena_push(1, sizeof(Scope));
     sc->next = scope;
     scope = sc;
 }
@@ -203,7 +203,7 @@ internal Type *find_tag(Token *tok)
 
 internal Node *new_node(NodeKind kind, Token *tok)
 {
-    Node *node = calloc(1, sizeof(Node));
+    Node *node = arena_push(1, sizeof(Node));
     node->kind = kind;
     node->tok = tok;
     return node;
@@ -258,7 +258,7 @@ Node *new_cast(Node *expr, Type *ty)
 {
     add_type(expr);
 
-    Node *node = calloc(1, sizeof(Node));
+    Node *node = arena_push(1, sizeof(Node));
     node->kind = ND_CAST;
     node->tok = expr->tok;
     node->lhs = expr;
@@ -268,7 +268,7 @@ Node *new_cast(Node *expr, Type *ty)
 
 internal VarScope *push_scope(char *name)
 {
-    VarScope *sc = calloc(1, sizeof(VarScope));
+    VarScope *sc = arena_push(1, sizeof(VarScope));
     sc->name = name;
     sc->next = scope->vars;
     scope->vars = sc;
@@ -277,7 +277,7 @@ internal VarScope *push_scope(char *name)
 
 internal Initializer *new_initializer(Type *ty, bool is_flexible)
 {
-    Initializer *init = calloc(1, sizeof(Initializer));
+    Initializer *init = arena_push(1, sizeof(Initializer));
     init->ty = ty;
 
     if (ty->kind == TY_ARRAY) {
@@ -286,7 +286,7 @@ internal Initializer *new_initializer(Type *ty, bool is_flexible)
             return init;
         }
 
-        init->children = calloc(ty->array_len, sizeof(Initializer *));
+        init->children = arena_push(ty->array_len, sizeof(Initializer *));
         for (int i = 0; i < ty->array_len; i++) {
             init->children[i] = new_initializer(ty->base, false);
         }
@@ -299,11 +299,11 @@ internal Initializer *new_initializer(Type *ty, bool is_flexible)
             len++;
         }
 
-        init->children = calloc(len, sizeof(Initializer *));
+        init->children = arena_push(len, sizeof(Initializer *));
 
         for (Member *mem = ty->members; mem; mem = mem->next) {
             if (is_flexible && ty->is_flexible && !mem->next) {
-                Initializer *child = calloc(1, sizeof(Initializer));
+                Initializer *child = arena_push(1, sizeof(Initializer));
                 child->ty = mem->ty;
                 child->is_flexible = true;
                 init->children[mem->idx] = child;
@@ -319,7 +319,7 @@ internal Initializer *new_initializer(Type *ty, bool is_flexible)
 
 internal Obj *new_var(char *name, Type *ty)
 {
-    Obj *var = calloc(1, sizeof(Obj));
+    Obj *var = arena_push(1, sizeof(Obj));
     var->name = name;
     var->ty = ty;
     var->align = ty->align;
@@ -385,7 +385,7 @@ internal Type *find_typedef(Token *tok)
 
 internal void push_tag_scope(Token *tok, Type *ty)
 {
-    TagScope *sc = calloc(1, sizeof(TagScope));
+    TagScope *sc = arena_push(1, sizeof(TagScope));
     sc->name = strndup(tok->loc, tok->len);
     sc->ty = ty;
     sc->next = scope->tags;
@@ -1063,7 +1063,7 @@ internal Type *copy_struct_type(Type *ty)
     Member head = {};
     Member *cur = &head;
     for (Member *mem = ty->members; mem; mem = mem->next) {
-        Member *m = calloc(1, sizeof(Member));
+        Member *m = arena_push(1, sizeof(Member));
         *m = *mem;
         cur = cur->next = m;
     }
@@ -1232,7 +1232,7 @@ internal Relocation *write_gvar_data(Relocation *cur, Initializer *init, Type *t
         return cur;
     }
 
-    Relocation *rel = calloc(1, sizeof(Relocation));
+    Relocation *rel = arena_push(1, sizeof(Relocation));
     rel->offset = offset;
     rel->label = label;
     rel->addend = val;
@@ -1249,7 +1249,7 @@ internal void gvar_initializer(Token **rest, Token *tok, Obj *var)
     Initializer *init = initializer(rest, tok, var->ty, &var->ty);
 
     Relocation head = {};
-    char *buf = calloc(1, var->ty->size);
+    char *buf = arena_push(1, var->ty->size);
     write_gvar_data(&head, init, var->ty, buf, 0);
     var->init_data = buf;
     var->rel = head.next;
@@ -2188,7 +2188,7 @@ internal void struct_members(Token **rest, Token *tok, Type *ty)
             }
             first = false;
 
-            Member *mem = calloc(1, sizeof(Member));
+            Member *mem = arena_push(1, sizeof(Member));
             mem->ty = declarator(&tok, tok, basety);
             mem->name = mem->ty->name;
             mem->idx = idx++;

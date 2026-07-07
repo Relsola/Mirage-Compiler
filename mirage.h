@@ -15,9 +15,6 @@
 #define __attribute__(x)
 #endif
 
-#define MAX(x, y) ((x) < (y) ? (y) : (x))
-#define MIN(x, y) ((x) < (y) ? (x) : (y))
-
 typedef int8_t   i8;
 typedef int16_t  i16;
 typedef int32_t  i32;
@@ -36,6 +33,19 @@ typedef struct Node Node;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
+
+#define MAX(x, y) ((x) < (y) ? (y) : (x))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+#define KB(x) ((u64)(x) << 10)
+#define MB(x) (KB(x) << 10)
+#define GB(x) (MB(x) << 10)
+
+//
+// arena.c
+//
+void *arena_push(u64 count, u64 size);
+void *arena_realloc(void *buf, u64 before_size, u64 after_size);
 
 //
 // tokenize.c

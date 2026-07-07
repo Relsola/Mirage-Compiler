@@ -3,12 +3,12 @@
 void strarray_push(StringArray *arr, char *s)
 {
     if (!arr->data) {
-        arr->data = calloc(8, sizeof(char *));
+        arr->data = arena_push(8, sizeof(char *));
         arr->capacity = 8;
     }
 
     if (arr->capacity == arr->len) {
-        arr->data = realloc(arr->data, sizeof(char *) * arr->capacity * 2);
+        arr->data = arena_realloc(arr->data, sizeof(char *) * arr->capacity, sizeof(char *) * arr->capacity * 2);
         arr->capacity *= 2;
         for (int i = arr->len; i < arr->capacity; i++) {
             arr->data[i] = NULL;
@@ -20,9 +20,8 @@ void strarray_push(StringArray *arr, char *s)
 
 char *strndup(const char *source, u32 size)
 {
-    char *buf = malloc((size + 1) * sizeof(char));
+    char *buf = arena_push(1, size + 1);
     memcpy(buf, source, size);
-    buf[size] = '\0';
     return buf;
 }
 
@@ -37,7 +36,7 @@ char *format(const char *fmt, ...)
 
     int len = _vscprintf(fmt, ap);
 
-    char *buf = malloc((size_t)len + 1);
+    char *buf = arena_push(1, len + 1);
     vsnprintf(buf, (size_t)len + 1, fmt, ap2);
 
     va_end(ap);

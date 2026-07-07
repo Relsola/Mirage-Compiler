@@ -109,7 +109,7 @@ bool consume(Token **rest, Token *tok, char *str)
 
 internal Token *new_token(TokenKind kind, char *start, char *end)
 {
-    Token *tok = calloc(1, sizeof(Token));
+    Token *tok = arena_push(1, sizeof(Token));
     tok->kind = kind;
     tok->loc = start;
     tok->len = end - start;
@@ -336,7 +336,7 @@ internal char *string_literal_end(char *p)
 internal Token *read_string_literal(char *start)
 {
     char *end = string_literal_end(start + 1);
-    char *buf = calloc(1, end - start);
+    char *buf = arena_push(1, end - start);
     int len = 0;
 
     for (char *p = start + 1; p < end;) {
@@ -612,7 +612,7 @@ internal char *read_file(const char *path)
         }
 
         rewind(fp);
-        buf = malloc(size + 2);
+        buf = arena_push(1, size + 2);
         if (!buf) {
             error("out of memory");
         }
@@ -628,11 +628,11 @@ internal char *read_file(const char *path)
     }
 
     u64 cap = 4096;
-    buf = malloc(cap);
+    buf = arena_push(1, cap);
     for (;;) {
         if (len == cap) {
+            buf = arena_realloc(buf, cap, cap * 2);
             cap *= 2;
-            buf = realloc(buf, cap);
         }
 
         u64 n = fread(buf + len, 1, cap - len, fp);
@@ -644,7 +644,7 @@ internal char *read_file(const char *path)
     }
 
     if (len + 2 > cap) {
-        buf = realloc(buf, len + 2);
+        buf = arena_realloc(buf, cap, len + 2);
     }
 
 __terminate_source:
@@ -660,7 +660,7 @@ File **get_input_files(void) {
 }
 
 File *new_file(char *name, int file_no, char *contents) {
-  File *file = calloc(1, sizeof(File));
+  File *file = arena_push(1, sizeof(File));
   file->name = name;
   file->file_no = file_no;
   file->contents = contents;
@@ -711,7 +711,7 @@ Token *tokenize_file(char *path)
     File *file = new_file(path, file_no + 1, contents);
 
     // Save the filename for assembler .file directive.
-    input_files = realloc(input_files, sizeof(char *) * (file_no + 2));
+    input_files = arena_realloc(input_files, sizeof(char *) * file_no, sizeof(char *) * (file_no + 2));
     input_files[file_no] = file;
     input_files[file_no + 1] = nullptr;
     file_no++;

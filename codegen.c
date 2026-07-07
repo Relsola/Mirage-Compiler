@@ -1,8 +1,8 @@
 #include "mirage.h"
 
-internal constexpr i64 outbuf_size = (1 << 16);
+internal constexpr i64 outbuf_size = KB(128);
 internal char outbuf[outbuf_size];
-internal i64 outpos = 0;
+internal i64 outpos;
 
 internal FILE *output_file;
 
@@ -944,7 +944,7 @@ internal char *escape_for_gas(const char *s){
         ++len;
     }
 
-    char *escape = calloc(1, len + 1);
+    char *escape = arena_push(1, len + 1);
     len = 0;
     for (const char *p = s; *p; ++p) {
         if (*p == '\\' || *p == '"') {

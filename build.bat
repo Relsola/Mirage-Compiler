@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 cd /D "%~dp0"
 
 set "cx=%CD%\build\mirage.exe"
-set "clang_common=-std=c23 -o %cx% main.c tokenize.c parse.c codegen.c type.c string.c preprocess.c"
+set "clang_common=-std=c23 -o %cx% main.c tokenize.c parse.c codegen.c type.c string.c preprocess.c arena.c"
 
 if not exist build   mkdir build
 if /I "%~1"=="test"  goto  test
