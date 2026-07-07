@@ -1,5 +1,9 @@
 #include "mirage.h"
 
+internal constexpr i64 outbuf_size = (1 << 16);
+internal char outbuf[outbuf_size];
+internal i64 outpos = 0;
+
 internal FILE *output_file;
 
 internal int depth;
@@ -14,13 +18,35 @@ internal Obj *current_fn;
 internal void gen_expr(Node *node);
 internal void gen_stmt(Node *node);
 
+internal void flush_output()
+{
+    if (outpos == 0) {
+        return;
+    }
+
+    fwrite(outbuf, 1, outpos, output_file);
+    outpos = 0;
+}
+
 internal void println(char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(output_file, fmt, ap);
+
+    i64 left = outbuf_size - outpos;
+    i64 n = vsnprintf(outbuf + outpos, left, fmt, ap);
     va_end(ap);
-    fprintf(output_file, "\n");
+
+    if (n >= left) {
+        flush_output();
+
+        va_start(ap, fmt);
+        n = vsnprintf(outbuf, outbuf_size, fmt, ap);
+        va_end(ap);
+    }
+
+    outpos += n;
+    outbuf[outpos++] = '\n';
 }
 
 internal int count(void)
@@ -943,4 +969,6 @@ void codegen(Obj *prog, FILE *out)
     assign_lvar_offsets(prog);
     emit_data(prog);
     emit_text(prog);
+
+    flush_output();
 }

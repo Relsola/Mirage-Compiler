@@ -1,6 +1,11 @@
 #include "test.h"
 #include "include1.h"
 
+char *main_filename1 = __FILE__;
+int main_line1 = __LINE__;
+#define LINE() __LINE__
+int main_line2 = LINE();
+
 #
 
 /* */ #
@@ -249,6 +254,83 @@ int main() {
 
 #define paste4(x, y, z) x##y##z
   ASSERT(123, paste4(1,2,3));
+
+#define M12
+#if defined(M12)
+  m = 3;
+#else
+  m = 4;
+#endif
+  ASSERT(3, m);
+
+#define M12
+#if defined M12
+  m = 3;
+#else
+  m = 4;
+#endif
+  ASSERT(3, m);
+
+#if defined(M12) - 1
+  m = 3;
+#else
+  m = 4;
+#endif
+  ASSERT(4, m);
+
+#if defined(NO_SUCH_MACRO)
+  m = 3;
+#else
+  m = 4;
+#endif
+  ASSERT(4, m);
+
+#if no_such_symbol == 0
+  m = 5;
+#else
+  m = 6;
+#endif
+  ASSERT(5, m);
+
+#define STR(x) #x
+#define M12(x) STR(x)
+#define M13(x) M12(foo.x)
+  ASSERT(0, strcmp(M13(bar), "foo.bar"));
+
+#define M13(x) M12(foo. x)
+  ASSERT(0, strcmp(M13(bar), "foo. bar"));
+
+#define M12 foo
+#define M13(x) STR(x)
+#define M14(x) M13(x.M12)
+  ASSERT(0, strcmp(M14(bar), "bar.foo"));
+
+#define M14(x) M13(x. M12)
+  ASSERT(0, strcmp(M14(bar), "bar. foo"));
+
+#include "include3.h"
+  ASSERT(3, foo);
+
+#include "include4.h"
+  ASSERT(4, foo);
+
+#define M13 "include3.h"
+#include M13
+  ASSERT(3, foo);
+
+#define M13 < include4.h
+#include M13 >
+  ASSERT(4, foo);
+
+#undef foo
+
+  ASSERT(1, _WIN32);
+
+  ASSERT(0, strcmp(main_filename1, "test\\macro.c"));
+  ASSERT(5, main_line1);
+  ASSERT(7, main_line2);
+  ASSERT(0, strcmp(include1_filename, "test\\include1.h"));
+  ASSERT(4, include1_line);
 
   printf("OK\n");
   return 0;

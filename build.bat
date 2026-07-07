@@ -2,20 +2,25 @@
 setlocal enabledelayedexpansion
 cd /D "%~dp0"
 
-if /I "%~1"=="test" goto test
-if /I "%~1"=="clean" goto clean
+set "cx=%CD%\build\mirage.exe"
+set "clang_common=-std=c23 -o %cx% main.c tokenize.c parse.c codegen.c type.c string.c preprocess.c"
 
-clang -std=c23 -O0 -g -Wall -o build\mirage.exe main.c tokenize.c parse.c codegen.c type.c string.c preprocess.c
+if not exist build   mkdir build
+if /I "%~1"=="test"  goto  test
+if /I "%~1"=="clean" goto  clean
+if /I "%~1"=="perf"  goto  perf
+
+clang -O0 -g -Wall %clang_common%
 exit /b 0
 
 :test
-clang -std=c23 -O2 -o build\mirage.exe main.c tokenize.c parse.c codegen.c type.c string.c preprocess.c
+clang -O2 %clang_common%
 for %%f in (test\*.c) do (
     echo ---------------------- %%~nf start ----------------------
     set "tmp_obj=build\%%~nf.obj"
     set "tmp_exe=build\%%~nf.exe"
 
-    build\mirage.exe -c -o !tmp_obj! %%f
+    %cx% -c -o !tmp_obj! %%f -Itest
     if !errorlevel! neq 0 exit /b !errorlevel!
 
     clang -o !tmp_exe! !tmp_obj! -xc test/common
@@ -24,6 +29,11 @@ for %%f in (test\*.c) do (
     !tmp_exe!
     if !errorlevel! neq 0 exit /b !errorlevel!
 )
+exit /b 0
+
+:perf
+clang -O2 %clang_common% -DPERF
+%cx% -c -S -o build\perf.s perf\main.c -Itest
 exit /b 0
 
 :clean

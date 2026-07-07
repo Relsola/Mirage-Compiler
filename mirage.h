@@ -78,6 +78,7 @@ struct Token
     bool at_bol;      // True if this token is at beginning of line
     bool has_space;   // True if this token follows a space character
     Hideset *hideset; // For macro expansion
+    Token *origin;    // If this is expanded from a macro, the original token
 };
 
 __attribute__((noreturn)) void error(char *fmt, ...);
@@ -368,3 +369,10 @@ struct StringArray
 void strarray_push(StringArray *arr, char *s);
 char *strndup(const char *source, u32 size);
 char *format(const char *fmt, ...);
+
+//
+// main.c
+//
+
+bool file_exists(char *path);
+extern StringArray include_paths;

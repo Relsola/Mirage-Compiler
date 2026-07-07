@@ -1,19 +1,59 @@
 #include <windows.h>
 #include "mirage.h"
 
+StringArray include_paths;
+
 internal char *opt_o;
 internal bool opt_S;
 internal bool opt_E;
 internal bool opt_c;
 
+
 internal StringArray input_paths;
 
 internal StringArray tmpfiles;
+
+#if PERF
+internal LARGE_INTEGER perf_freq;
+
+typedef struct ScopedTimer
+{
+    const char *name;
+    LARGE_INTEGER start;
+} ScopedTimer;
+
+internal ScopedTimer timer_start(const char *name)
+{
+    ScopedTimer t;
+    t.name = name;
+    QueryPerformanceCounter(&t.start);
+    return t;
+}
+
+internal void timer_stop(ScopedTimer *t)
+{
+    LARGE_INTEGER end;
+    QueryPerformanceCounter(&end);
+
+    f64 ms = (f64)(end.QuadPart - t->start.QuadPart) * 1000.0 / perf_freq.QuadPart;
+    printf("%-12s %.3f ms\n", t->name, ms);
+}
+#endif
 
 internal void usage(int status)
 {
     fprintf(stderr, "mirage [ -o <path> ] <file>\n");
     exit(status);
+}
+
+internal void add_default_include_paths(char *argv0)
+{
+    char drive[_MAX_DRIVE], dir[_MAX_DIR];
+    _splitpath_s(argv0, drive, _MAX_DRIVE, dir, _MAX_DIR, nullptr, 0, nullptr, 0);
+    char *path = format("%s%sinclude", drive, dir);
+    strarray_push(&include_paths, path);
+
+    // TODO Add standard include paths.
 }
 
 internal void parse_args(int argc, char **argv)
@@ -43,6 +83,11 @@ internal void parse_args(int argc, char **argv)
 
         if (!strcmp(argv[i], "-E")) {
             opt_E = true;
+            continue;
+        }
+
+        if (!strncmp(argv[i], "-I", 2)) {
+            strarray_push(&include_paths, argv[i] + 2);
             continue;
         }
 
@@ -125,6 +170,11 @@ internal char *create_tmpfile(void)
     return tmp_filename;
 }
 
+// Returns true if a given file exists.
+bool file_exists(char *path) {
+  return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
 // Print tokens to stdout. Used for -E.
 internal void print_tokens(Token *tok)
 {
@@ -146,6 +196,11 @@ internal void print_tokens(Token *tok)
 
 internal void compiler_to_asm(char *input_file, char *output_file)
 {
+#if PERF
+    ScopedTimer timer;
+    timer = timer_start("tokenize_file");
+#endif
+
     // Tokenize and parse.
     Token *tok = tokenize_file(input_file);
     if (!tok) {
@@ -154,7 +209,17 @@ internal void compiler_to_asm(char *input_file, char *output_file)
         error("%s: %s", input_file, err_buf);
     }
 
+#if PERF
+    timer_stop(&timer);
+    timer = timer_start("preprocess");
+#endif
+
     tok = preprocess(tok);
+
+#if PERF
+    timer_stop(&timer);
+    timer = timer_start("parse");
+#endif
 
     // If -E is given, print out preprocessed C code as a result.
     if (opt_E) {
@@ -164,6 +229,11 @@ internal void compiler_to_asm(char *input_file, char *output_file)
 
     Obj *prog = parse(tok);
 
+#if PERF
+    timer_stop(&timer);
+    timer = timer_start("codegen");
+#endif
+
     // Traverse the AST to emit assembly.
     FILE *out = open_file(output_file);
     fprintf(out, "  .intel_syntax noprefix\n");
@@ -172,8 +242,13 @@ internal void compiler_to_asm(char *input_file, char *output_file)
     if (out != stdout) {
         fclose(out);
     }
+
+#if PERF
+    timer_stop(&timer);
+#endif
 }
 
+// TODO error handler
 internal void run_subprocess(char *cmdline)
 {
     STARTUPINFOA si = { 0 };
@@ -186,23 +261,10 @@ internal void run_subprocess(char *cmdline)
     si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
-    BOOL ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
-
-    if (!ok) {
-        error("CreateProcess failed");
-    }
-
+    CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
     WaitForSingleObject(pi.hProcess, INFINITE);
-
-    DWORD exitcode = 0;
-    GetExitCodeProcess(pi.hProcess, &exitcode);
-
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-
-    if (exitcode != 0) {
-        exit(exitcode);
-    }
 }
 
 internal void compiler_to_obj(char *input_file, char *output_file)
@@ -218,11 +280,24 @@ internal void compiler_to_obj(char *input_file, char *output_file)
 int main(int argc, char **argv)
 {
     atexit(cleanup);
+
+#if PERF
+    QueryPerformanceFrequency(&perf_freq);
+    ScopedTimer timer;
+    timer = timer_start("parse_args");
+#endif
+
     parse_args(argc, argv);
 
-  if (input_paths.len > 1 && opt_o && (opt_c || opt_S | opt_E)){
-    error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");}
+    if (input_paths.len > 1 && opt_o && (opt_c || opt_S | opt_E)) {
+        error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
+    }
 
+    add_default_include_paths(argv[0]);
+
+#if PERF
+    timer_stop(&timer);
+#endif
 
     for (int i = 0; i < input_paths.len; ++i) {
         char *input_file = input_paths.data[i];

@@ -667,6 +667,36 @@ File *new_file(char *name, int file_no, char *contents) {
   return file;
 }
 
+// Removes backslashes followed by a newline.
+internal void remove_backslash_newline(char *p)
+{
+    int i = 0, j = 0;
+
+    // We want to keep the number of newline characters so that
+    // the logical line number matches the physical one.
+    // This counter maintain the number of newlines we have removed.
+    int n = 0;
+
+    while (p[i]) {
+        if (p[i] == '\\' && p[i + 1] == '\n') {
+            i += 2;
+            n++;
+        } else if (p[i] == '\n') {
+            p[j++] = p[i++];
+            for (; n > 0; n--) {
+                p[j++] = '\n';
+            }
+        } else {
+            p[j++] = p[i++];
+        }
+    }
+
+    for (; n > 0; n--) {
+        p[j++] = '\n';
+    }
+    p[j] = '\0';
+}
+
 Token *tokenize_file(char *path)
 {
     char *contents = read_file(path);
@@ -674,6 +704,9 @@ Token *tokenize_file(char *path)
         return nullptr;
     }
 
+    remove_backslash_newline(contents);
+
+    // Save the filename for assembler .file directive.
     local_persist int file_no;
     File *file = new_file(path, file_no + 1, contents);
 

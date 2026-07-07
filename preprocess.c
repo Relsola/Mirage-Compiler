@@ -1,4 +1,4 @@
-// This file implements the C preprocessor.
+ // This file implements the C preprocessor.
 //
 // The preprocessor takes a list of tokens as an input and returns a
 // new list of tokens as an output.
@@ -39,6 +39,8 @@ struct MacroArg
     Token *tok;
 };
 
+typedef Token *macro_handler_fn(Token *);
+
 typedef struct Macro Macro;
 struct Macro
 {
@@ -48,6 +50,7 @@ struct Macro
     MacroParam *params;
     Token *body;
     bool deleted;
+    macro_handler_fn *handler;
 };
 
 // `#if` can be nested, so we use a stack to manage nested `#if`s.
@@ -71,6 +74,7 @@ internal Macro *macros;
 internal CondIncl *cond_incl;
 
 internal Token *preprocess2(Token *tok);
+internal Macro *find_macro(Token *tok);
 
 internal bool is_hash(Token *tok)
 {
@@ -264,15 +268,70 @@ internal Token *copy_line(Token **rest, Token *tok)
     return head.next;
 }
 
+internal Token *new_num_token(int val, Token *tmpl)
+{
+    char *buf = format("%d\n", val);
+    return tokenize(new_file(tmpl->file->name, tmpl->file->file_no, buf));
+}
+
+internal Token *read_const_expr(Token **rest, Token *tok)
+{
+    tok = copy_line(rest, tok);
+
+    Token head = {};
+    Token *cur = &head;
+
+    while (tok->kind != TK_EOF) {
+        // "defined(foo)" or "defined foo" becomes "1" if macro "foo"
+        // is defined. Otherwise "0".
+        if (equal(tok, "defined")) {
+            Token *start = tok;
+            bool has_paren = consume(&tok, tok->next, "(");
+
+            if (tok->kind != TK_IDENT) {
+                error_tok(start, "macro name must be an identifier");
+            }
+
+            Macro *m = find_macro(tok);
+            tok = tok->next;
+
+            if (has_paren) {
+                tok = skip(tok, ")");
+            }
+
+            cur = cur->next = new_num_token(m ? 1 : 0, start);
+            continue;
+        }
+
+        cur = cur->next = tok;
+        tok = tok->next;
+    }
+
+    cur->next = tok;
+    return head.next;
+}
+
 // Read and evaluate a constant expression.
 internal long eval_const_expr(Token **rest, Token *tok)
 {
     Token *start = tok;
-    Token *expr = copy_line(rest, tok->next);
+    Token *expr = read_const_expr(rest, tok->next);
     expr = preprocess2(expr);
 
     if (expr->kind == TK_EOF) {
         error_tok(start, "no expression");
+    }
+
+    // [https://www.sigbus.info/n1570#6.10.1p4] The standard requires
+    // we replace remaining non-macro identifiers with "0" before
+    // evaluating a constant expression. For example, `#if foo` is
+    // equivalent to `#if 0` if foo is not defined.
+    for (Token *t = expr; t->kind != TK_EOF; t = t->next) {
+        if (t->kind == TK_IDENT) {
+            Token *next = t->next;
+            *t = *new_num_token(0, t);
+            t->next = next;
+        }
     }
 
     Token *rest2;
@@ -426,11 +485,11 @@ internal MacroArg *find_arg(MacroArg *args, Token *tok)
 }
 
 // Concatenates all tokens in `tok` and returns a new string.
-internal char *join_tokens(Token *tok)
+internal char *join_tokens(Token *tok, Token *end)
 {
     // Compute the length of the resulting token.
     int len = 1;
-    for (Token *t = tok; t && t->kind != TK_EOF; t = t->next) {
+    for (Token *t = tok; t != end && t->kind != TK_EOF; t = t->next) {
         if (t != tok && t->has_space) {
             len++;
         }
@@ -441,7 +500,7 @@ internal char *join_tokens(Token *tok)
 
     // Copy token texts.
     int pos = 0;
-    for (Token *t = tok; t && t->kind != TK_EOF; t = t->next) {
+    for (Token *t = tok; t != end && t->kind != TK_EOF; t = t->next) {
         if (t != tok && t->has_space) {
             buf[pos++] = ' ';
         }
@@ -459,7 +518,7 @@ internal Token *stringize(Token *hash, Token *arg)
     // Create a new string token. We need to set some value to its
     // source location for error reporting function, so we use a macro
     // name token as a template.
-    char *s = join_tokens(arg);
+    char *s = join_tokens(arg, nullptr);
     return new_str_token(s, hash);
 }
 
@@ -550,6 +609,8 @@ internal Token *subst(Token *tok, MacroArg *args)
         // before they are substituted into a macro body.
         if (arg) {
             Token *t = preprocess2(arg->tok);
+            t->at_bol = tok->at_bol;
+            t->has_space = tok->has_space;
             for (; t->kind != TK_EOF; t = t->next) {
                 cur = cur->next = copy_token(t);
             }
@@ -580,11 +641,25 @@ internal bool expand_macro(Token **rest, Token *tok)
         return false;
     }
 
+    // Built-in dynamic macro application such as __LINE__
+    if (m->handler) {
+        *rest = m->handler(tok);
+        (*rest)->next = tok->next;
+        return true;
+    }
+
     // Object-like macro application
     if (m->is_objlike) {
         Hideset *hs = hideset_union(tok->hideset, new_hideset(m->name));
         Token *body = add_hideset(m->body, hs);
+
+        for (Token *t = body; t->kind != TK_EOF; t = t->next) {
+            t->origin = tok;
+        }
+
         *rest = append(body, tok->next);
+        (*rest)->at_bol = tok->at_bol;
+        (*rest)->has_space = tok->has_space;
         return true;
     }
 
@@ -609,8 +684,86 @@ internal bool expand_macro(Token **rest, Token *tok)
 
     Token *body = subst(m->body, args);
     body = add_hideset(body, hs);
+
+    for (Token *t = body; t->kind != TK_EOF; t = t->next) {
+        t->origin = macro_token;
+    }
+
     *rest = append(body, tok->next);
+    (*rest)->at_bol = macro_token->at_bol;
+    (*rest)->has_space = macro_token->has_space;
     return true;
+}
+
+internal char *search_include_paths(char *filename)
+{
+    if (filename[0] == '\\') {
+        return filename;
+    }
+
+    // Search a file from the include paths.
+    for (int i = 0; i < include_paths.len; i++) {
+        char *path = format("%s\\%s", include_paths.data[i], filename);
+        if (file_exists(path)) {
+            return path;
+        }
+    }
+    return nullptr;
+}
+
+// Read an #include argument.
+internal char *read_include_filename(Token **rest, Token *tok, bool *is_dquote)
+{
+    // Pattern 1: #include "foo.h"
+    if (tok->kind == TK_STR) {
+        // A double-quoted filename for #include is a special kind of
+        // token, and we don't want to interpret any escape sequences in it.
+        // For example, "\f" in "C:\foo" is not a formfeed character but
+        // just two non-control characters, backslash and f.
+        // So we don't want to use token->str.
+        *is_dquote = true;
+        *rest = skip_line(tok->next);
+        return strndup(tok->loc + 1, tok->len - 2);
+    }
+
+    // Pattern 2: #include <foo.h>
+    if (equal(tok, "<")) {
+        // Reconstruct a filename from a sequence of tokens between
+        // "<" and ">".
+        Token *start = tok;
+
+        // Find closing ">".
+        for (; !equal(tok, ">"); tok = tok->next) {
+            if (tok->at_bol || tok->kind == TK_EOF) {
+                error_tok(tok, "expected '>'");
+            }
+        }
+
+        *is_dquote = false;
+        *rest = skip_line(tok->next);
+        return join_tokens(start->next, tok);
+    }
+
+    // Pattern 3: #include FOO
+    // In this case FOO must be macro-expanded to either
+    // a single string token or a sequence of "<" ... ">".
+    if (tok->kind == TK_IDENT) {
+        Token *tok2 = preprocess2(copy_line(rest, tok));
+        return read_include_filename(&tok2, tok2, is_dquote);
+    }
+
+    error_tok(tok, "expected a filename");
+}
+
+internal Token *include_file(Token *tok, char *path, Token *filename_tok)
+{
+    Token *tok2 = tokenize_file(path);
+    if (!tok2) {
+        char err_buf[256];
+        strerror_s(err_buf, sizeof(err_buf), errno);
+        error_tok(filename_tok, "%s: cannot open file: %s", path, err_buf);
+    }
+    return append(tok2, tok);
 }
 
 // Visit all tokens in `tok` while evaluating preprocessing
@@ -637,23 +790,22 @@ internal Token *preprocess2(Token *tok)
         tok = tok->next;
 
         if (equal(tok, "include")) {
-            tok = tok->next;
+            bool is_dquote;
+            char *filename = read_include_filename(&tok, tok->next, &is_dquote);
 
-            if (tok->kind != TK_STR) {
-                error_tok(tok, "expected a filename");
+            if (filename[0] != '\\' && is_dquote) {
+                char drive[_MAX_DRIVE], dir[_MAX_DIR];
+                _splitpath_s(start->file->name, drive, _MAX_DRIVE, dir, _MAX_DIR, nullptr, 0, nullptr, 0);
+                char *path = format("%s%s%s", drive, dir, filename);
+
+                if (file_exists(path)) {
+                    tok = include_file(tok, path, start->next->next);
+                    continue;
+                }
             }
 
-            char drive[_MAX_DRIVE], dir[_MAX_DIR];
-            _splitpath_s(_strdup(tok->file->name), drive, _MAX_DRIVE, dir, _MAX_DIR, nullptr, 0, nullptr, 0);
-            char *path = format("%s%s%s", drive, dir, tok->str);
-            Token *tok2 = tokenize_file(path);
-            if (!tok2) {
-                char err_buf[256];
-                strerror_s(err_buf, sizeof(err_buf), errno);
-                error_tok(tok, "%s", err_buf);
-            }
-            tok = skip_line(tok->next);
-            tok = append(tok2, tok);
+            char *path = search_include_paths(filename);
+            tok = include_file(tok, path ? path : filename, start->next->next);
             continue;
         }
 
@@ -740,6 +892,10 @@ internal Token *preprocess2(Token *tok)
             continue;
         }
 
+        if (equal(tok, "error")) {
+            error_tok(tok, "error");
+        }
+
         // `#`-only line is legal. It's called a null directive.
         if (tok->at_bol) {
             continue;
@@ -752,9 +908,48 @@ internal Token *preprocess2(Token *tok)
     return head.next;
 }
 
+internal void define_macro(char *name, char *buf)
+{
+    Token *tok = tokenize(new_file("<built-in>", 1, buf));
+    add_macro(name, true, tok);
+}
+
+internal Macro *add_builtin(char *name, macro_handler_fn *fn)
+{
+    Macro *m = add_macro(name, true, nullptr);
+    m->handler = fn;
+    return m;
+}
+
+internal Token *file_macro(Token *tmpl)
+{
+    while (tmpl->origin) {
+        tmpl = tmpl->origin;
+    }
+    return new_str_token(tmpl->file->name, tmpl);
+}
+
+internal Token *line_macro(Token *tmpl)
+{
+    while (tmpl->origin) {
+        tmpl = tmpl->origin;
+    }
+    return new_num_token(tmpl->line_no, tmpl);
+}
+
+internal void init_macros(void)
+{
+    // Define predefined macros
+    define_macro("_WIN32", "1");
+
+    add_builtin("__FILE__", file_macro);
+    add_builtin("__LINE__", line_macro);
+}
+
 // Entry point function of the preprocessor.
 Token *preprocess(Token *tok)
 {
+    init_macros();
     tok = preprocess2(tok);
 
     if (cond_incl) {
