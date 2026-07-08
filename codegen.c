@@ -1,6 +1,6 @@
 #include "mirage.h"
 
-internal constexpr i64 outbuf_size = KB(128);
+internal constexpr i64 outbuf_size = MB(1);
 internal char outbuf[outbuf_size];
 internal i64 outpos;
 
@@ -856,8 +856,9 @@ internal void store_fp(int r, int offset, int sz)
     case 8:
         println("  movsd [rbp + %d], xmm%d", offset, r);
         return;
+    default:
+        unreachable();
     }
-    unreachable();
 }
 
 internal void store_gp(int r, int offset, int size)
@@ -875,8 +876,33 @@ internal void store_gp(int r, int offset, int size)
     case 8:
         println("  mov [rbp + %d] , %s", offset, argreg64[r]);
         return;
+    default:
+        m__unreachable();
     }
-    m__unreachable();
+}
+
+internal void store_stack_param(int src_offset, int dst_offset, int size)
+{
+    switch (size) {
+    case 1:
+        println("  mov al, byte ptr [rbp + %d]", src_offset);
+        println("  mov [rbp + %d], al", dst_offset);
+        return;
+    case 2:
+        println("  mov ax, word ptr [rbp + %d]", src_offset);
+        println("  mov [rbp + %d], ax", dst_offset);
+        return;
+    case 4:
+        println("  mov eax, dword ptr [rbp + %d]", src_offset);
+        println("  mov [rbp + %d], eax", dst_offset);
+        return;
+    case 8:
+        println("  mov rax, qword ptr [rbp + %d]", src_offset);
+        println("  mov [rbp + %d], rax", dst_offset);
+        return;
+    default:
+        m__unreachable();
+    }
 }
 
 internal void emit_text(Obj *prog)
@@ -905,13 +931,19 @@ internal void emit_text(Obj *prog)
         }
 
         // Save passed-by-register arguments to the stack
-        int i = 0;
-        for (Obj *var = fn->params; var; var = var->next) {
-            if (is_flonum(var->ty)) {
-                store_fp(i++, var->offset, var->ty->size);
+        Obj *params = fn->params;
+        for (int i = 0; i < 4 && params; ++i) {
+            if (is_flonum(params->ty)) {
+                store_fp(i, params->offset, params->ty->size);
             } else {
-                store_gp(i++, var->offset, var->ty->size);
+                store_gp(i, params->offset, params->ty->size);
             }
+            params = params->next;
+        }
+
+        for (int i = 0; params; ++i) {
+            store_stack_param(48 + (i * 8), params->offset, params->ty->size);
+            params = params->next;
         }
 
         if (fn->va_area) {

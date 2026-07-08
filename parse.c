@@ -152,9 +152,6 @@ internal Node *postfix(Token **rest, Token *tok);
 internal Node *funcall(Token **rest, Token *tok, Node *node);
 internal Node *unary(Token **rest, Token *tok);
 internal Node *primary(Token **rest, Token *tok);
-internal Node *builtin_va_start(Token **rest, Token *tok);
-internal Node *builtin_va_arg(Token **rest, Token *tok);
-internal Node *builtin_va_end(Token **rest, Token *tok);
 internal Token *parse_typedef(Token *tok, Type *basety);
 internal bool is_function(Token *tok);
 internal Token *function(Token *tok, Type *basety, VarAttr *attr);
@@ -462,7 +459,8 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
         if (consume(&tok, tok, "const")        || consume(&tok, tok, "volatile")   ||
             consume(&tok, tok, "auto")         || consume(&tok, tok, "register")   ||
             consume(&tok, tok, "restrict")     || consume(&tok, tok, "__restrict") ||
-            consume(&tok, tok, "__restrict__") || consume(&tok, tok, "_Noreturn"))
+            consume(&tok, tok, "__restrict__") || consume(&tok, tok, "_Noreturn")  ||
+            consume(&tok, tok, "constexpr"))
         {
             continue;
         }
@@ -509,6 +507,7 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
         if (equal(tok, "void"))          { counter += VOID;     }
         else if (equal(tok, "char"))     { counter += CHAR;     }
         else if (equal(tok, "_Bool"))    { counter += BOOL;     }
+        else if (equal(tok, "bool"))     { counter += BOOL;     }
         else if (equal(tok, "short"))    { counter += SHORT;    }
         else if (equal(tok, "int"))      { counter += INT;      }
         else if (equal(tok, "long"))     { counter += LONG;     }
@@ -1270,7 +1269,7 @@ internal bool is_typename(Token *tok)
         "void", "_Bool", "char", "short", "int", "long", "struct", "union",
         "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
         "const", "volatile", "auto", "register", "restrict", "__restrict",
-        "__restrict__", "_Noreturn", "float", "double"
+        "__restrict__", "_Noreturn", "float", "double", "bool", "constexpr"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); ++i) {
@@ -2467,55 +2466,6 @@ internal Node *funcall(Token **rest, Token *tok, Node *fn)
     return node;
 }
 
-internal Node *builtin_va_start(Token **rest, Token *tok)
-{
-    Token *start = tok;
-    tok = skip(tok->next, "(");
-
-    Node *ap = assign(&tok, tok);
-    tok = skip(tok, ",");
-    assign(&tok, tok);
-    *rest = skip(tok, ")");
-
-    if (ap->kind != ND_VAR) {
-        error_tok(ap->tok, "va_start's first argument must be a variable");
-    }
-    if (!current_fn || !current_fn->va_area) {
-        error_tok(start, "va_start is available only in variadic functions");
-    }
-
-    Node *area = new_var_node(current_fn->va_area, start);
-    return new_binary(ND_ASSIGN, ap, area, start);
-}
-
-internal Node *builtin_va_arg(Token **rest, Token *tok)
-{
-    Token *start = tok;
-    tok = skip(tok->next, "(");
-
-    Node *ap = assign(&tok, tok);
-    tok = skip(tok, ",");
-    Type *ty = typename(&tok, tok);
-    *rest = skip(tok, ")");
-
-    if (ap->kind != ND_VAR) {
-        error_tok(ap->tok, "va_arg's first argument must be a variable");
-    }
-
-    Node *step = new_binary(ND_ASSIGN, ap, new_add(ap, new_num(8, start), start), start);
-    Node *addr = new_sub(ap, new_num(8, start), start);
-    Node *load = new_unary(ND_DEREF, new_cast(addr, pointer_to(ty)), start);
-    return new_binary(ND_COMMA, step, load, start);
-}
-
-internal Node *builtin_va_end(Token **rest, Token *tok)
-{
-    tok = skip(tok->next, "(");
-    assign(&tok, tok);
-    *rest = skip(tok, ")");
-    return new_node(ND_NULL_EXPR, tok);
-}
-
 // primary = "(" "{" stmt+ "}" ")"
 //         | "(" expr ")"
 //         | "sizeof" "(" type-name ")"
@@ -2527,18 +2477,6 @@ internal Node *builtin_va_end(Token **rest, Token *tok)
 internal Node *primary(Token **rest, Token *tok)
 {
     Token *start = tok;
-
-    if (equal(tok, "va_start") && equal(tok->next, "(")) {
-        return builtin_va_start(rest, tok);
-    }
-
-    if (equal(tok, "va_arg") && equal(tok->next, "(")) {
-        return builtin_va_arg(rest, tok);
-    }
-
-    if (equal(tok, "va_end") && equal(tok->next, "(")) {
-        return builtin_va_end(rest, tok);
-    }
 
     if (equal(tok, "(") && equal(tok->next, "{")) {
         // This is a GNU statement expression.
@@ -2576,6 +2514,20 @@ internal Node *primary(Token **rest, Token *tok)
         Node *node = unary(rest, tok->next);
         add_type(node);
         return new_ulong(node->ty->align, tok);
+    }
+
+    if (equal(tok, "true")) {
+        Node *node = new_num(1, tok);
+        node->ty = ty_int;
+        *rest = tok->next;
+        return node;
+    }
+
+    if (equal(tok, "false")) {
+        Node *node = new_num(0, tok);
+        node->ty = ty_int;
+        *rest = tok->next;
+        return node;
     }
 
     if (tok->kind == TK_IDENT) {
@@ -2694,10 +2646,21 @@ internal Token *function(Token *tok, Type *basety, VarAttr *attr)
             nparams++;
         }
         fn->va_start_offset = 16 + nparams * 8;
-        fn->va_area = new_lvar("", pointer_to(ty_char));
+        fn->va_area = new_lvar("__va_area__", pointer_to(ty_char));
     }
 
     tok = skip(tok, "{");
+
+    // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
+    // automatically defined as a local variable containing the
+    // current function name.
+    push_scope("__func__")->var =
+        new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
+
+    // [GNU] __FUNCTION__ is yet another name of __func__.
+    push_scope("__FUNCTION__")->var =
+        new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
+
     fn->body = compound_stmt(&tok, tok);
     fn->locals = locals;
     leave_scope();
@@ -2748,7 +2711,6 @@ internal bool is_function(Token *tok)
 Obj *parse(Token *tok)
 {
     globals = NULL;
-    push_scope("va_list")->type_def = pointer_to(ty_char);
 
     while (tok->kind != TK_EOF) {
         VarAttr attr = {};

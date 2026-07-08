@@ -1,4 +1,5 @@
 #include "test.h"
+#include <stdarg.h>
 
 int ret3(void) {
   return 3;
@@ -115,6 +116,22 @@ int (*fnptr(int (*fn)(int n, ...)))(int, ...) {
 
 int param_decay2(int x()) { return x(); }
 
+char *func_fn(void) {
+  return __func__;
+}
+
+char *function_fn(void) {
+  return __FUNCTION__;
+}
+
+int add6(int a, int b, int c, int d, int e, int f) {
+  return a + b + c + d + e + f;
+}
+
+float add6f(int a, float b, float c, float d, float e, float f) {
+  return a + b + c + d + e + f;
+}
+
 int main() {
   ASSERT(3, ret3());
   ASSERT(8, add2(3, 5));
@@ -191,6 +208,16 @@ int main() {
   ASSERT(6, fnptr(add_all)(3, 1, 2, 3));
 
   ASSERT(3, param_decay2(ret3));
+
+  ASSERT(5, sizeof(__func__));
+  ASSERT(0, strcmp("main", __func__));
+  ASSERT(0, strcmp("func_fn", func_fn()));
+
+  ASSERT(0, strcmp("main", __FUNCTION__));
+  ASSERT(0, strcmp("function_fn", function_fn()));
+
+  ASSERT(21, add6(1,2,3,4,5,6));
+  ASSERT(22, add6f(1,2.2,3.2,4.2,5.2,6.2));
 
   printf("OK\n");
   return 0;

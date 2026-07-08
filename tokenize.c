@@ -209,10 +209,11 @@ internal bool is_keyword(Token *tok)
         return KW("for") || KW("int");
     case 4:
         return KW("void") || KW("char") || KW("long") || KW("else") ||
-               KW("enum") || KW("goto") || KW("case") || KW("auto");
+               KW("enum") || KW("goto") || KW("case") || KW("auto") ||
+               KW("bool") || KW("true");
     case 5:
         return KW("_Bool") || KW("short") || KW("while") || KW("break") ||
-               KW("float") || KW("union") || KW("const");
+               KW("float") || KW("union") || KW("const") || KW("false");
     case 6:
         return KW("struct") || KW("return") || KW("sizeof") || KW("static") ||
                KW("extern") || KW("signed") || KW("double") || KW("switch");
@@ -222,7 +223,7 @@ internal bool is_keyword(Token *tok)
         return KW("continue") || KW("unsigned") || KW("_Alignof") || KW("_Alignas") ||
                KW("volatile") || KW("register") || KW("restrict");
     case 9:
-        return KW("_Noreturn");
+        return KW("_Noreturn") || KW("constexpr");
     case 10:
         return KW("__restrict");
     case 12:

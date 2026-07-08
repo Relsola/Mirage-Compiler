@@ -5,7 +5,6 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdint.h>
-#include <errno.h>
 
 #define internal        static
 #define local_persist   static

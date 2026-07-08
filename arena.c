@@ -3,7 +3,7 @@
 
 internal char *base;
 internal u64 arena_size = MB(64);
-internal u64 arena_pos = 0;
+internal u64 arena_pos;
 
 void *arena_push(u64 count, u64 size)
 {
@@ -22,10 +22,9 @@ void *arena_push(u64 count, u64 size)
 
 void *arena_realloc(void *buf, u64 before_size, u64 after_size)
 {
-    if ((buf == base + (arena_pos - before_size)) &&
-        (arena_pos - before_size + after_size) <= arena_size)
-    {
-        arena_pos = arena_pos - before_size + after_size;
+    u64 difference = after_size - before_size;
+    if ((buf == base + (arena_pos - before_size)) && ((arena_pos + difference) <= arena_size)) {
+        arena_pos = arena_pos + difference;
         return buf;
     }
 

@@ -8,6 +8,7 @@ void funcy_type(int arg[restrict static 3]) {}
 
 int main() {
   { volatile x; }
+  { constexpr x; }
   { int volatile x; }
   { volatile int x; }
   { volatile int volatile volatile x; }

@@ -17,6 +17,9 @@ int main() {
   ASSERT(1, (_Bool)2);
   ASSERT(0, (_Bool)(char)256);
 
+  ASSERT(0, ({ bool x=false; x; }));
+  ASSERT(1, ({ bool x=true; x; }));
+
   printf("OK\n");
   return 0;
 }
