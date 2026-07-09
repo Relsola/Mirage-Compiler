@@ -1,7 +1,8 @@
 #include "mirage.h"
 
 internal constexpr i64 outbuf_size = MB(1);
-internal char outbuf[outbuf_size];
+// internal char outbuf[outbuf_size];
+internal char outbuf[MB(1)];
 internal i64 outpos;
 
 internal FILE *output_file;
@@ -857,7 +858,7 @@ internal void store_fp(int r, int offset, int sz)
         println("  movsd [rbp + %d], xmm%d", offset, r);
         return;
     default:
-        unreachable();
+        m__unreachable();
     }
 }
 

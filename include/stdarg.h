@@ -14,6 +14,11 @@ typedef char *va_list;
         *((type *)(ap - 8)); \
     })
 
+#define va_copy(dest, src) \
+    do {                   \
+        dest = src;        \
+    } while (0)
+
 #define va_end(ap)
 
 #endif

@@ -2,9 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <ctype.h>
 
 #define internal        static
 #define local_persist   static

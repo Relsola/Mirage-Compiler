@@ -261,7 +261,7 @@ internal void run_subprocess(char *cmdline)
     si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
-    CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+    CreateProcessA(NULL, cmdline, NULL, NULL, true, 0, NULL, NULL, &si, &pi);
     WaitForSingleObject(pi.hProcess, INFINITE);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
