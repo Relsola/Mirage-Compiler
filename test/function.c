@@ -1,5 +1,4 @@
 #include "test.h"
-#include <stdarg.h>
 
 int ret3(void) {
   return 3;
@@ -77,21 +76,11 @@ unsigned short ushort_fn();
 char schar_fn();
 short sshort_fn();
 
-int add_all(int n, ...) {
-  va_list ap;
-  va_start(ap, n);
+int add_all(int n, ...);
 
-  int sum = 0;
-  for (int i = 0; i < n; i++)
-    sum += va_arg(ap, int);
-  va_end(ap);
-  return sum;
-}
-
-int vsprintf(char *buf, char *fmt, va_list ap);
+int vsprintf(char *buf, char *fmt, char *ap);
 char *fmt(char *buf, char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
+  char *ap = __va_area__;
   vsprintf(buf, fmt, ap);
 }
 
@@ -124,12 +113,25 @@ char *function_fn(void) {
   return __FUNCTION__;
 }
 
-int add6(int a, int b, int c, int d, int e, int f) {
-  return a + b + c + d + e + f;
+int add6_int(int a, int b, int c, int d, int e, int f);
+int add6_float(int a, float b, float c, float d, float e, float f);
+int add10_int(int x1, int x2, int x3, int x4, int x5, int x6, int x7, int x8, int x9, int x10);
+float add10_float(float x1, float x2, float x3, float x4, float x5, float x6, float x7, float x8, float x9, float x10);
+double add10_double(double x1, double x2, double x3, double x4, double x5, double x6, double x7, double x8, double x9, double x10);
+
+int many_args1(int a, int b, int c, int d, int e, int f, int g, int h) {
+  return g / h;
 }
 
-float add6f(int a, float b, float c, float d, float e, float f) {
-  return a + b + c + d + e + f;
+double many_args2(double a, double b, double c, double d, double e,
+                  double f, double g, double h, double i, double j) {
+  return i / j;
+}
+
+int many_args3(int a, double b, int c, int d, double e, int f,
+               double g, int h, double i, double j, double k,
+               double l, double m, int n, int o, double p) {
+  return o / p;
 }
 
 int main() {
@@ -216,8 +218,17 @@ int main() {
   ASSERT(0, strcmp("main", __FUNCTION__));
   ASSERT(0, strcmp("function_fn", function_fn()));
 
-  ASSERT(21, add6(1,2,3,4,5,6));
-  ASSERT(22, add6f(1,2.2,3.2,4.2,5.2,6.2));
+  ASSERT(21, add6_int(1,2,3,4,5,6));
+  ASSERT(22, add6_float(1,2,3,4,5,6));
+  ASSERT(55, add10_int(1,2,3,4,5,6,7,8,9,10));
+  ASSERT(55, add10_float(1,2,3,4,5,6,7,8,9,10));
+  ASSERT(55, add10_double(1,2,3,4,5,6,7,8,9,10));
+
+  ASSERT(0, ({ char buf[200]; sprintf(buf, "%d %.1f %.1f %.1f %d %d %.1f %d %d %d %d %.1f %d %d %.1f %.1f %.1f %.1f %d", 1, 1.0, 1.0, 1.0, 1, 1, 1.0, 1, 1, 1, 1, 1.0, 1, 1, 1.0, 1.0, 1.0, 1.0, 1); strcmp("1 1.0 1.0 1.0 1 1 1.0 1 1 1 1 1.0 1 1 1.0 1.0 1.0 1.0 1", buf); }));
+
+  ASSERT(4, many_args1(1,2,3,4,5,6,40,10));
+  ASSERT(4, many_args2(1,2,3,4,5,6,7,8,40,10));
+  ASSERT(8, many_args3(1,2,3,4,5,6,7,8,9,10,11,12,13,14,80,10));
 
   printf("OK\n");
   return 0;

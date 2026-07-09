@@ -465,9 +465,9 @@ internal Type *declspec(Token **rest, Token *tok, VarAttr *attr)
             continue;
         }
 
-        if (equal(tok, "_Alignas")) {
+        if (equal(tok, "_Alignas") || equal(tok, "alignas")) {
             if (!attr) {
-                error_tok(tok, "_Alignas is not allowed in this context");
+                error_tok(tok, "%s is not allowed in this context", strndup(tok->loc, tok->len));
             }
             tok = skip(tok->next, "(");
 
@@ -1267,9 +1267,9 @@ internal bool is_typename(Token *tok)
 
     local_persist char *kw[] = {
         "void", "_Bool", "char", "short", "int", "long", "struct", "union",
-        "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
-        "const", "volatile", "auto", "register", "restrict", "__restrict",
-        "__restrict__", "_Noreturn", "float", "double", "bool", "constexpr"
+        "typedef", "enum", "static", "extern", "_Alignas", "alignas", "signed",
+        "unsigned", "const", "volatile", "auto", "register", "restrict",
+        "__restrict", "__restrict__", "_Noreturn", "float", "double", "bool", "constexpr"
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); ++i) {
@@ -2504,13 +2504,16 @@ internal Node *primary(Token **rest, Token *tok)
         return new_ulong(node->ty->size, tok);
     }
 
-    if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
+    if ((equal(tok, "_Alignof") || equal(tok, "alignof")) &&
+        equal(tok->next, "(") &&
+        is_typename(tok->next->next))
+    {
         Type *ty = typename(&tok, tok->next->next);
         *rest = skip(tok, ")");
         return new_ulong(ty->align, tok);
     }
 
-    if (equal(tok, "_Alignof")) {
+    if (equal(tok, "_Alignof") || equal(tok, "alignof")) {
         Node *node = unary(rest, tok->next);
         add_type(node);
         return new_ulong(node->ty->align, tok);

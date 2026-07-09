@@ -218,7 +218,7 @@ internal bool is_keyword(Token *tok)
         return KW("struct") || KW("return") || KW("sizeof") || KW("static") ||
                KW("extern") || KW("signed") || KW("double") || KW("switch");
     case 7:
-        return KW("typedef") || KW("default");
+        return KW("typedef") || KW("default") || KW("alignof") || KW("alignas");
     case 8:
         return KW("continue") || KW("unsigned") || KW("_Alignof") || KW("_Alignas") ||
                KW("volatile") || KW("register") || KW("restrict");
@@ -354,9 +354,9 @@ internal Token *read_string_literal(char *start)
     return tok;
 }
 
-internal Token *read_char_literal(char *start)
+internal Token *read_char_literal(char *start, char *quote)
 {
-    char *p = start + 1;
+    char *p = quote + 1;
     if (*p == '\0') {
         error_at(start, "unclosed char literal");
     }
@@ -556,8 +556,15 @@ Token *tokenize(File *file)
 
         // Character literal
         if (*p == '\'') {
-            cur = cur->next = read_char_literal(p);
+            cur = cur->next = read_char_literal(p, p);
             p += cur->len;
+            continue;
+        }
+
+        // Wide character literal
+        if (startswith(p, "L'")) {
+            cur = cur->next = read_char_literal(p, p + 1);
+            p = cur->loc + cur->len;
             continue;
         }
 
