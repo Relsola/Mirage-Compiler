@@ -2644,11 +2644,6 @@ internal Token *function(Token *tok, Type *basety, VarAttr *attr)
     fn->params = locals;
 
     if (ty->is_variadic) {
-        int nparams = 0;
-        for (Type *param = ty->params; param; param = param->next) {
-            nparams++;
-        }
-        fn->va_start_offset = 16 + nparams * 8;
         fn->va_area = new_lvar("__va_area__", pointer_to(ty_char));
     }
 

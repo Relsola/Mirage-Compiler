@@ -1,5 +1,7 @@
 #include "mirage.h"
 
+internal constexpr i64 reg_params_max = 4;
+
 internal constexpr i64 outbuf_size = MB(1);
 // internal char outbuf[outbuf_size];
 internal char outbuf[MB(1)];
@@ -31,6 +33,12 @@ internal void flush_output()
 
 internal void println(char *fmt, ...)
 {
+#if 0
+    va_list p;
+    va_start(p, fmt);
+    vprintf(fmt, p);
+    printf("\n");
+#else
     va_list ap;
     va_start(ap, fmt);
 
@@ -48,6 +56,7 @@ internal void println(char *fmt, ...)
 
     outpos += n;
     outbuf[outpos++] = '\n';
+#endif
 }
 
 internal int count(void)
@@ -481,27 +490,27 @@ void gen_expr(Node *node)
       }
     case ND_FUNCALL: {
         int nargs = count_args(node->args);
-        int regargs = nargs < 4 ? nargs : 4;
+        int regargs = nargs < reg_params_max ? nargs : reg_params_max;
         int stack_args = nargs - regargs;
-
-        gen_expr(node->lhs);
-        push();
 
         // For Win64, stack arguments must be located right above the 32-byte
         // shadow space. Insert optional 8-byte padding *below* stack args.
-        bool needs_pad = ((depth + stack_args) % 2) != 0;
-        if (needs_pad) {
+        if ((depth + stack_args) % 2) {
             println("  sub rsp, 8");
             depth++;
+            stack_args++;
         }
 
         push_args(node->args);
+        // The call function are stored in rax
+        gen_expr(node->lhs);
+
         int nreg = 0;
         for (Node *arg = node->args; arg && nreg < regargs; arg = arg->next) {
             if (is_flonum(arg->ty)) {
                 popf(nreg);
                 // Win64 only requires mirroring FP args into GPRs for variadic calls.
-                if (node->func_ty && node->func_ty->is_variadic) {
+                if (node->func_ty->is_variadic) {
                     println("  movq %s, xmm%d", argreg64[nreg], nreg);
                 }
             } else {
@@ -510,7 +519,7 @@ void gen_expr(Node *node)
             nreg++;
         }
 
-        println("  mov r10, [rsp + %d]", stack_args * 8 + (needs_pad ? 8 : 0));
+        println("  mov r10, rax");
         println("  sub rsp, 32");
         println("  call r10");
         println("  add rsp, 32");
@@ -519,13 +528,6 @@ void gen_expr(Node *node)
             println("  add rsp, %d", stack_args * 8);
             depth -= stack_args;
         }
-
-        if (needs_pad) {
-            println("  add rsp, 8");
-            depth--;
-        }
-
-        pop("r10");
 
         // It looks like the most significant 48 or 56 bits in RAX may
         // contain garbage if a function return type is short or bool/char,
@@ -802,13 +804,36 @@ internal void assign_lvar_offsets(Obj *prog)
             continue;
         }
 
-        int offset = 0;
-        for (Obj *var = fn->locals; var; var = var->next) {
-            offset += var->ty->size;
-            offset = align_to(offset, var->align);
-            var->offset = -offset;
+        // If a function has many parameters, some parameters are
+        // inevitably passed by stack rather than by register.
+        // The first passed-by-stack parameter resides at RBP+48.
+        int top = 48;
+        int bottom = 0;
+        int nargs = 0;
+
+        // Assign offsets to pass-by-stack parameters.
+        for (Obj *var = fn->params; var; var = var->next) {
+            if (nargs++ < reg_params_max) {
+                continue;
+            }
+
+            top = align_to(top, 8);
+            var->offset = top;
+            top += var->ty->size;
         }
-        fn->stack_size = align_to(offset, 16);
+
+        // Assign offsets to pass-by-register parameters and local variables.
+        for (Obj *var = fn->locals; var; var = var->next) {
+            if (var->offset) {
+                continue;
+            }
+
+            bottom += var->ty->size;
+            bottom = align_to(bottom, var->align);
+            var->offset = -bottom;
+        }
+
+        fn->stack_size = align_to(bottom, 16);
     }
 }
 
@@ -882,30 +907,6 @@ internal void store_gp(int r, int offset, int size)
     }
 }
 
-internal void store_stack_param(int src_offset, int dst_offset, int size)
-{
-    switch (size) {
-    case 1:
-        println("  mov al, byte ptr [rbp + %d]", src_offset);
-        println("  mov [rbp + %d], al", dst_offset);
-        return;
-    case 2:
-        println("  mov ax, word ptr [rbp + %d]", src_offset);
-        println("  mov [rbp + %d], ax", dst_offset);
-        return;
-    case 4:
-        println("  mov eax, dword ptr [rbp + %d]", src_offset);
-        println("  mov [rbp + %d], eax", dst_offset);
-        return;
-    case 8:
-        println("  mov rax, qword ptr [rbp + %d]", src_offset);
-        println("  mov [rbp + %d], rax", dst_offset);
-        return;
-    default:
-        m__unreachable();
-    }
-}
-
 internal void emit_text(Obj *prog)
 {
     for (Obj *fn = prog; fn; fn = fn->next) {
@@ -932,27 +933,31 @@ internal void emit_text(Obj *prog)
         }
 
         // Save passed-by-register arguments to the stack
-        Obj *params = fn->params;
-        for (int i = 0; i < 4 && params; ++i) {
-            if (is_flonum(params->ty)) {
-                store_fp(i, params->offset, params->ty->size);
-            } else {
-                store_gp(i, params->offset, params->ty->size);
+        int i = 0;
+        for (Obj *var = fn->params; var; var = var->next) {
+            if (var->offset > 0) {
+                continue;
             }
-            params = params->next;
-        }
 
-        for (int i = 0; params; ++i) {
-            store_stack_param(48 + (i * 8), params->offset, params->ty->size);
-            params = params->next;
+            if (is_flonum(var->ty)) {
+                store_fp(i++, var->offset, var->ty->size);
+            } else {
+                store_gp(i++, var->offset, var->ty->size);
+            }
         }
 
         if (fn->va_area) {
-            for (int r = 0; r < 4; r++) {
-                // call and rbp use 16 byte
-                println("  mov [rbp + %d], %s", 16 + (r * 8), argreg64[r]);
+            // shadow space stack, base is RBP+16.
+            int stack_base = 16;
+            for (int r = 0; r < reg_params_max; ++r) {
+                println("  mov [rbp + %d], %s", stack_base + (r * 8), argreg64[r]);
             }
-            println("  lea rax, [rbp + %d]", fn->va_start_offset);
+
+            int params_offset = 0;
+            for (Obj *var = fn->params; var; var = var->next) {
+                params_offset += 8;
+            }
+            println("  lea rax, [rbp + %d]", stack_base + params_offset);
             println("  mov [rbp + %d], rax", fn->va_area->offset);
         }
 

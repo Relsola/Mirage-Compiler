@@ -142,7 +142,6 @@ struct Obj
     // Function
     Obj *params;
     Obj *va_area;
-    int va_start_offset;
     Node *body;
     Obj *locals;
     int stack_size;
