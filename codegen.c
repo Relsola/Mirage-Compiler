@@ -91,27 +91,77 @@ internal void popf(int reg)
     --depth;
 }
 
-internal void push_args(Node *args)
+internal void copy_struct(Type *ty, int offset)
 {
-    if (args) {
-        push_args(args->next);
+    for (int i = 0; i < ty->size; i++) {
+        println("  mov r10b, byte ptr [rax + %d]", i);
+        println("  mov byte ptr [rsp + %d], r10b", offset + i);
+    }
+    println("  lea rax, [rsp + %d]", offset);
+}
 
-        gen_expr(args);
-        if (is_flonum(args->ty)) {
-            pushf();
-        } else {
-            push();
+internal void push_struct(Type *ty)
+{
+    if (ty->size == 1) {
+        println("  movzx eax, byte ptr [rax]");
+    } else if (ty->size == 2) {
+        println("  movzx eax, word ptr [rax]");
+    } else if (ty->size == 4) {
+        println("  mov eax, dword ptr [rax]");
+    } else {
+        println("  mov rax, [rax]");
+    }
+
+    push();
+}
+
+internal bool is_reg_aggregate(Type *ty)
+{
+    return ty->size == 1 || ty->size == 2 || ty->size == 4 || ty->size == 8;
+}
+
+internal void get_args_stack(Node *args, int *stack_struct, int *stack_arg)
+{
+    int nregs = 0;
+    for (Node *arg = args; arg; arg = arg->next) {
+        Type *ty = arg->ty;
+
+        if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && !is_reg_aggregate(ty)) {
+            *stack_struct += (align_to(ty->size, 8) / 8);
+        }
+
+        if (nregs++ >= reg_params_max) {
+            ++*stack_arg;
         }
     }
 }
 
-internal int count_args(Node *arg)
+internal void push_args(Node *args, int *struct_offset)
 {
-    int n = 0;
-    for (; arg; arg = arg->next) {
-        n++;
+    if (!args) {
+        return;
     }
-    return n;
+
+    push_args(args->next, struct_offset);
+
+    Type *ty = args->ty;
+    gen_expr(args);
+
+    if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+        if (is_reg_aggregate(ty)) {
+            push_struct(ty);
+        } else {
+            copy_struct(ty, *struct_offset);
+            *struct_offset += align_to(ty->size, 8);
+            push();
+        }
+    } else if (is_flonum(ty)) {
+        pushf();
+    } else {
+        push();
+    }
+
+    *struct_offset += 8;
 }
 
 // Round up `n` to the nearest multiple of `align`. For instance,
@@ -203,7 +253,7 @@ internal void store(Type *ty)
     switch (ty->kind) {
     case TY_STRUCT:
     case TY_UNION:
-        for (int i = 0; i < ty->size; i++) {
+        for (int i = 0; i < ty->size; ++i) {
             println("  mov r8b, byte ptr [rax + %d]", i);
             println("  mov byte ptr [r10 + %d], r8b", i);
         }
@@ -489,24 +539,28 @@ void gen_expr(Node *node)
           return;
       }
     case ND_FUNCALL: {
-        int nargs = count_args(node->args);
-        int regargs = nargs < reg_params_max ? nargs : reg_params_max;
-        int stack_args = nargs - regargs;
+        int stack_struct = 0, stack_arg = 0;
+        get_args_stack(node->args, &stack_struct, &stack_arg);
 
-        // For Win64, stack arguments must be located right above the 32-byte
-        // shadow space. Insert optional 8-byte padding *below* stack args.
-        if ((depth + stack_args) % 2) {
+        int stack = stack_struct + stack_arg;
+        if ((depth + stack) % 2) {
             println("  sub rsp, 8");
             depth++;
-            stack_args++;
+            stack++;
         }
 
-        push_args(node->args);
+        if (stack_struct > 0) {
+            println("  sub rsp, %d", stack_struct * 8);
+            depth += stack_struct;
+        }
+        int struct_offset = 0;
+        push_args(node->args, &struct_offset);
+
         // The call function are stored in rax
         gen_expr(node->lhs);
 
         int nreg = 0;
-        for (Node *arg = node->args; arg && nreg < regargs; arg = arg->next) {
+        for (Node *arg = node->args; arg && nreg < reg_params_max; arg = arg->next) {
             if (is_flonum(arg->ty)) {
                 popf(nreg);
                 // Win64 only requires mirroring FP args into GPRs for variadic calls.
@@ -524,9 +578,9 @@ void gen_expr(Node *node)
         println("  call r10");
         println("  add rsp, 32");
 
-        if (stack_args) {
-            println("  add rsp, %d", stack_args * 8);
-            depth -= stack_args;
+        if (stack) {
+            println("  add rsp, %d", stack * 8);
+            depth -= stack;
         }
 
         // It looks like the most significant 48 or 56 bits in RAX may
@@ -903,7 +957,11 @@ internal void store_gp(int r, int offset, int size)
         println("  mov [rbp + %d] , %s", offset, argreg64[r]);
         return;
     default:
-        m__unreachable();
+        for (int i = 0; i < size; i++) {
+            println("  mov r10b, byte ptr [%s + %d]", argreg64[r], i);
+            println("  mov byte ptr [rbp + %d], r10b", offset + i);
+        }
+        return;
     }
 }
 
