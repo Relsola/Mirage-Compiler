@@ -76,6 +76,7 @@ int isspace(int c);
 int ispunct(int c);
 int isdigit(int c);
 int isxdigit(int c);
+int isalnum(int c);
 char *strstr(char *haystack, char *needle);
 char *strchr(char *s, int c);
 double strtod(char *nptr, char **endptr);

@@ -56,6 +56,16 @@ internal void add_default_include_paths(char *argv0)
     // TODO Add standard include paths.
 }
 
+internal void define(char *str)
+{
+    char *eq = strchr(str, '=');
+    if (eq) {
+        define_macro(strndup(str, eq - str), eq + 1);
+    } else {
+        define_macro(str, "1");
+    }
+}
+
 internal void parse_args(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
@@ -88,6 +98,26 @@ internal void parse_args(int argc, char **argv)
 
         if (!strncmp(argv[i], "-I", 2)) {
             strarray_push(&include_paths, argv[i] + 2);
+            continue;
+        }
+
+        if (!strcmp(argv[i], "-D")) {
+            define(argv[++i]);
+            continue;
+        }
+
+        if (!strncmp(argv[i], "-D", 2)) {
+            define(argv[i] + 2);
+            continue;
+        }
+
+        if (!strcmp(argv[i], "-U")) {
+            undef_macro(argv[++i]);
+            continue;
+        }
+
+        if (!strncmp(argv[i], "-U", 2)) {
+            undef_macro(argv[i] + 2);
             continue;
         }
 
@@ -287,6 +317,7 @@ int main(int argc, char **argv)
     timer = timer_start("parse_args");
 #endif
 
+    init_macros();
     parse_args(argc, argv);
 
     if (input_paths.len > 1 && opt_o && (opt_c || opt_S | opt_E)) {

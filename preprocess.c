@@ -335,6 +335,9 @@ internal long eval_const_expr(Token **rest, Token *tok)
         }
     }
 
+    // Convert pp-numbers to regular numbers
+    convert_pp_tokens(expr);
+
     Token *rest2;
     i64 val = const_expr(&rest2, expr);
     if (rest2->kind != TK_EOF) {
@@ -853,11 +856,8 @@ internal Token *preprocess2(Token *tok)
             if (tok->kind != TK_IDENT) {
                 error_tok(tok, "macro name must be an identifier");
             }
-            char *name = strndup(tok->loc, tok->len);
+            undef_macro(strndup(tok->loc, tok->len));
             tok = skip_line(tok->next);
-
-            Macro *m = add_macro(name, true, NULL);
-            m->deleted = true;
             continue;
         }
 
@@ -942,10 +942,16 @@ internal Token *preprocess2(Token *tok)
     return head.next;
 }
 
-internal void define_macro(char *name, char *buf)
+void define_macro(char *name, char *buf)
 {
     Token *tok = tokenize(new_file("<built-in>", 1, buf));
     add_macro(name, true, tok);
+}
+
+void undef_macro(char *name)
+{
+    Macro *m = add_macro(name, true, NULL);
+    m->deleted = true;
 }
 
 internal Macro *add_builtin(char *name, macro_handler_fn *fn)
@@ -971,7 +977,7 @@ internal Token *line_macro(Token *tmpl)
     return new_num_token(tmpl->line_no, tmpl);
 }
 
-internal void init_macros(void)
+void init_macros(void)
 {
     // Define predefined macros
     define_macro("_WIN32", "1");
@@ -1019,14 +1025,13 @@ internal void join_adjacent_string_literals(Token *tok1)
 // Entry point function of the preprocessor.
 Token *preprocess(Token *tok)
 {
-    init_macros();
     tok = preprocess2(tok);
 
     if (cond_incl) {
         error_tok(cond_incl->tok, "unterminated conditional directive");
     }
 
-    convert_keywords(tok);
+    convert_pp_tokens(tok);
     join_adjacent_string_literals(tok);
     return tok;
 }

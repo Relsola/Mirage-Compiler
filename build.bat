@@ -32,7 +32,7 @@ for %%f in (test\*.c) do (
 exit /b 0
 
 :perf
-clang -O2 %clang_common% -DPERF
+clang -O2 %clang_common% -D PERF
 
 echo ---------------------- main start ----------------------
 %cx% -c -S -o build\main.s main.c -Iperf
