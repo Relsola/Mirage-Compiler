@@ -126,6 +126,15 @@ internal void parse_args(int argc, char **argv)
             continue;
         }
 
+        // These options are ignored for now.
+        if (!strncmp(argv[i], "-O", 2) ||
+            !strncmp(argv[i], "-W", 2) ||
+            !strncmp(argv[i], "-g", 2) ||
+            !strncmp(argv[i], "-std=", 5) ||
+            !strcmp(argv[i], "-w")) {
+            continue;
+        }
+
         if (argv[i][0] == '-' && argv[i][1] != '\0') {
             error("unknown argument: %s", argv[i]);
         }

@@ -447,10 +447,24 @@ void gen_expr(Node *node)
             return;
         }
     case ND_VAR:
-    case ND_MEMBER:
         gen_addr(node);
         load(node->ty);
         return;
+    case ND_MEMBER: {
+        gen_addr(node);
+        load(node->ty);
+
+        Member *mem = node->member;
+        if (mem->is_bitfield) {
+            println("  shl rax, %d", 64 - mem->bit_width - mem->bit_offset);
+            if (mem->ty->is_unsigned) {
+                println("  shr rax, %d", 64 - mem->bit_width);
+            } else {
+                println("  sar rax, %d", 64 - mem->bit_width);
+            }
+        }
+        return;
+    }
     case ND_DEREF:
         gen_expr(node->lhs);
         load(node->ty);
@@ -479,6 +493,29 @@ void gen_expr(Node *node)
         gen_addr(node->lhs);
         push();
         gen_expr(node->rhs);
+
+        if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
+            println("  mov r8, rax");
+
+            // If the lhs is a bitfield, we need to read the current value
+            // from memory and merge it with a new value.
+            Member *mem = node->lhs->member;
+            println("  mov rdi, rax");
+            println("  and rdi, %ld", (1L << mem->bit_width) - 1);
+            println("  shl rdi, %d", mem->bit_offset);
+
+            println("  mov rax, [rsp]");
+            load(mem->ty);
+
+            long mask = ((1L << mem->bit_width) - 1) << mem->bit_offset;
+            println("  mov r9, %ld", ~mask);
+            println("  and rax, r9");
+            println("  or rax, rdi");
+            store(node->ty);
+            println("  mov rax, r8");
+            return;
+        }
+
         store(node->ty);
         return;
     case ND_STMT_EXPR:

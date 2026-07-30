@@ -161,6 +161,11 @@ internal i64 eval2(Node *node, char **label);
 internal i64 eval_rval(Node *node, char **label);
 internal f64 eval_double(Node *node);
 
+internal int align_down(int n, int align)
+{
+    return align_to(n - align + 1, align);
+}
+
 internal void enter_scope(void)
 {
     Scope *sc = arena_push(1, sizeof(Scope));
@@ -1173,6 +1178,17 @@ internal Node *lvar_initializer(Token **rest, Token *tok, Obj *var)
     return new_binary(ND_COMMA, lhs, rhs, tok);
 }
 
+internal u64 read_buf(char *buf, int sz)
+{
+    switch (sz) {
+    case 1:  return *buf;
+    case 2:  return *(u16 *)buf;
+    case 4:  return *(u32 *)buf;
+    case 8:  return *(u64 *)buf;
+    default: m__unreachable();
+    }
+}
+
 internal void write_buf(char *buf, u64 val, int size)
 {
     if (size == 1) {
@@ -1200,7 +1216,21 @@ internal Relocation *write_gvar_data(Relocation *cur, Initializer *init, Type *t
 
     if (ty->kind == TY_STRUCT) {
         for (Member *mem = ty->members; mem; mem = mem->next) {
-            cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf, offset + mem->offset);
+            if (mem->is_bitfield) {
+                Node *expr = init->children[mem->idx]->expr;
+                if (!expr) {
+                    break;
+                }
+
+                char *loc = buf + offset + mem->offset;
+                u64 oldval = read_buf(loc, mem->ty->size);
+                u64 newval = eval(expr);
+                u64 mask = (1L << mem->bit_width) - 1;
+                u64 combined = oldval | ((newval & mask) << mem->bit_offset);
+                write_buf(loc, combined, mem->ty->size);
+            } else {
+                cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf, offset + mem->offset);
+            }
         }
         return cur;
     }
@@ -1736,14 +1766,43 @@ i64 const_expr(Token **rest, Token *tok)
     return eval(node);
 }
 
-// Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
-// where tmp is a fresh pointer variable.
+// Convert op= operators to expressions containing an assignment.
+//
+// In general, `A op= C` is converted to ``tmp = &A, *tmp = *tmp op B`.
+// However, if a given expression is of form `A.x op= C`, the input is
+// converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
+// to bitfields.
 internal Node *to_assign(Node *binary)
 {
     add_type(binary->lhs);
     add_type(binary->rhs);
     Token *tok = binary->tok;
 
+    // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
+    if (binary->lhs->kind == ND_MEMBER) {
+        Obj *var = new_lvar("", pointer_to(binary->lhs->lhs->ty));
+
+        Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
+                                 new_unary(ND_ADDR, binary->lhs->lhs, tok), tok);
+
+        Node *expr2 = new_unary(ND_MEMBER,
+                                new_unary(ND_DEREF, new_var_node(var, tok), tok),
+                                tok);
+        expr2->member = binary->lhs->member;
+
+        Node *expr3 = new_unary(ND_MEMBER,
+                                new_unary(ND_DEREF, new_var_node(var, tok), tok),
+                                tok);
+        expr3->member = binary->lhs->member;
+
+        Node *expr4 = new_binary(ND_ASSIGN, expr2,
+                                 new_binary(binary->kind, expr3, binary->rhs, tok),
+                                 tok);
+
+        return new_binary(ND_COMMA, expr1, expr4, tok);
+    }
+
+    // Convert `A op= C` to ``tmp = &A, *tmp = *tmp op B`.
     Obj *var = new_lvar("", pointer_to(binary->lhs->ty));
 
     Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
@@ -2140,8 +2199,12 @@ internal Node *unary(Token **rest, Token *tok)
     }
 
     if (equal(tok, "&")) {
-        Node *node = new_unary(ND_ADDR, cast(rest, tok->next), tok);
-        return node;
+        Node *lhs = cast(rest, tok->next);
+        add_type(lhs);
+        if (lhs->kind == ND_MEMBER && lhs->member->is_bitfield) {
+            error_tok(tok, "cannot take address of bitfield");
+        }
+        return new_unary(ND_ADDR, lhs, tok);
     }
 
     if (equal(tok, "!")) {
@@ -2192,6 +2255,12 @@ internal void struct_members(Token **rest, Token *tok, Type *ty)
             mem->name = mem->ty->name;
             mem->idx = idx++;
             mem->align = attr.align ? attr.align : mem->ty->align;
+
+            if (consume(&tok, tok, ":")) {
+                mem->is_bitfield = true;
+                mem->bit_width = const_expr(&tok, tok);
+            }
+
             cur = cur->next = mem;
         }
     }
@@ -2265,17 +2334,34 @@ internal Type *struct_decl(Token **rest, Token *tok)
     }
 
     // Assign offsets within the struct to members.
-    int offset = 0;
+    int bits = 0;
+
     for (Member *mem = ty->members; mem; mem = mem->next) {
-        offset = align_to(offset, mem->align);
-        mem->offset = offset;
-        offset += mem->ty->size;
+        if (mem->is_bitfield && mem->bit_width == 0) {
+            // Zero-width anonymous bitfield has a special meaning.
+            // It affects only alignment.
+            bits = align_to(bits, mem->ty->size * 8);
+        } else if (mem->is_bitfield) {
+            int sz = mem->ty->size;
+            if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8)) {
+                bits = align_to(bits, sz * 8);
+            }
+
+            mem->offset = align_down(bits / 8, sz);
+            mem->bit_offset = bits % (sz * 8);
+            bits += mem->bit_width;
+        } else {
+            bits = align_to(bits, mem->align * 8);
+            mem->offset = bits / 8;
+            bits += mem->ty->size * 8;
+        }
 
         if (ty->align < mem->align) {
             ty->align = mem->align;
         }
     }
-    ty->size = align_to(offset, ty->align);
+
+    ty->size = align_to(bits, ty->align * 8) / 8;
     return ty;
 }
 
