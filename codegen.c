@@ -500,9 +500,9 @@ void gen_expr(Node *node)
             // If the lhs is a bitfield, we need to read the current value
             // from memory and merge it with a new value.
             Member *mem = node->lhs->member;
-            println("  mov rdi, rax");
-            println("  and rdi, %ld", (1L << mem->bit_width) - 1);
-            println("  shl rdi, %d", mem->bit_offset);
+            println("  mov r10, rax");
+            println("  and r10, %ld", (1L << mem->bit_width) - 1);
+            println("  shl r10, %d", mem->bit_offset);
 
             println("  mov rax, [rsp]");
             load(mem->ty);
@@ -510,7 +510,7 @@ void gen_expr(Node *node)
             long mask = ((1L << mem->bit_width) - 1) << mem->bit_offset;
             println("  mov r9, %ld", ~mask);
             println("  and rax, r9");
-            println("  or rax, rdi");
+            println("  or rax, r10");
             store(node->ty);
             println("  mov rax, r8");
             return;
@@ -919,8 +919,16 @@ internal void assign_lvar_offsets(Obj *prog)
                 continue;
             }
 
+            // AMD64 System V ABI has a special alignment rule for an array of
+            // length at least 16 bytes. We need to align such array to at least
+            // 16-byte boundaries. See p.14 of
+            // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf.
+            int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
+                            ? MAX(16, var->align)
+                            : var->align;
+
             bottom += var->ty->size;
-            bottom = align_to(bottom, var->align);
+            bottom = align_to(bottom, align);
             var->offset = -bottom;
         }
 
@@ -938,7 +946,11 @@ internal void emit_data(Obj *prog)
         if (!var->is_static) {
             println("  .globl %s", var->name);
         }
-        println("  .align %d", var->align);
+
+        int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
+                        ? MAX(16, var->align)
+                        : var->align;
+        println("  .align %d", align);
 
         if (var->init_data) {
             println("  .data");
@@ -1059,6 +1071,14 @@ internal void emit_text(Obj *prog)
         // Emit code
         gen_stmt(fn->body);
         assert(depth == 0);
+
+        // [https://www.sigbus.info/n1570#5.1.2.2.3p1] The C spec defines
+        // a special rule for the main function. Reaching the end of the
+        // main function is equivalent to returning 0, even though the
+        // behavior is undefined for the other functions.
+        if (strcmp(fn->name, "main") == 0) {
+            println("  mov rax, 0");
+        }
 
         // Epilogue
         println(".L.return.%s:", fn->name);

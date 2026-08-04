@@ -289,5 +289,4 @@ int main() {
   ASSERT(30, ({ Ty5 x={10,20,30}; struct_test15(x, 2); }));
 
   printf("OK\n");
-  return 0;
 }

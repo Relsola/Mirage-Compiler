@@ -6,8 +6,6 @@ StringArray include_paths;
 internal char *opt_o;
 internal bool opt_S;
 internal bool opt_E;
-internal bool opt_c;
-
 
 internal StringArray input_paths;
 
@@ -121,14 +119,10 @@ internal void parse_args(int argc, char **argv)
             continue;
         }
 
-        if (!strcmp(argv[i], "-c")) {
-            opt_c = true;
-            continue;
-        }
-
         // These options are ignored for now.
         if (!strncmp(argv[i], "-O", 2) ||
             !strncmp(argv[i], "-W", 2) ||
+            !strncmp(argv[i], "-c", 2) ||
             !strncmp(argv[i], "-g", 2) ||
             !strncmp(argv[i], "-std=", 5) ||
             !strcmp(argv[i], "-w")) {
@@ -161,6 +155,13 @@ internal FILE *open_file(const char *path)
         error("cannot open output file: %s: %s", path, err_buf);
     }
     return out;
+}
+
+internal bool endswith(char *p, char *q)
+{
+    int len1 = strlen(p);
+    int len2 = strlen(q);
+    return (len1 >= len2) && !strcmp(p + len1 - len2, q);
 }
 
 // Replace file extension
@@ -316,29 +317,34 @@ internal void compiler_to_obj(char *input_file, char *output_file)
     run_subprocess(cmd);
 }
 
+internal void run_linker(StringArray *inputs, char *output)
+{
+    char *cmd = "";
+    for (int i = 0; i < inputs->len; ++i) {
+        cmd = format("%s %s", cmd, inputs->data[i]);
+    }
+    // TODO linker params
+    cmd = format("clang %s -o %s -Wl,/defaultlib:legacy_stdio_definitions.lib", cmd, output);
+    run_subprocess(cmd);
+}
+
 int main(int argc, char **argv)
 {
     atexit(cleanup);
-
 #if PERF
     QueryPerformanceFrequency(&perf_freq);
-    ScopedTimer timer;
-    timer = timer_start("parse_args");
 #endif
 
     init_macros();
     parse_args(argc, argv);
 
-    if (input_paths.len > 1 && opt_o && (opt_c || opt_S | opt_E)) {
-        error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
+    if (input_paths.len > 1 && opt_o && (opt_S | opt_E)) {
+        error("cannot specify '-o' with '-S' or '-E' with multiple files");
     }
 
     add_default_include_paths(argv[0]);
 
-#if PERF
-    timer_stop(&timer);
-#endif
-
+    StringArray ld_args = {};
     for (int i = 0; i < input_paths.len; ++i) {
         char *input_file = input_paths.data[i];
 
@@ -348,18 +354,33 @@ int main(int argc, char **argv)
         } else if (opt_S) {
             output_file = replace_extension(input_file, ".s");
         } else {
-            output_file = replace_extension(input_file, ".obj");
+            output_file = replace_extension(input_file, ".o");
         }
 
+        // Handle .o
+        if (endswith(input_file, ".o")) {
+            strarray_push(&ld_args, input_file);
+            continue;
+        }
+
+#if PERF
+        printf("start compiler %s >>\n", input_file);
+#endif
         if (opt_S || opt_E) {
             compiler_to_asm(input_file, output_file);
             continue;
         }
 
-        // Traverse the AST to emit assembly.
-        char *tmpfile = create_tmpfile();
-        compiler_to_asm(input_file, tmpfile);
-        compiler_to_obj(tmpfile, output_file);
+        // Compile
+        char *tmp1 = create_tmpfile();
+        char *tmp2 = create_tmpfile();
+        compiler_to_asm(input_file, tmp1);
+        compiler_to_obj(tmp1, tmp2);
+        strarray_push(&ld_args, tmp2);
+    }
+
+    if (ld_args.len > 0) {
+        run_linker(&ld_args, opt_o ? opt_o : "main.exe");
     }
 
     return 0;
